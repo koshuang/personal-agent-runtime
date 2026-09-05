@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 from .db import DEFAULT_DB, claim_task, complete_task, create_task, fail_task, get_task, heartbeat, init_db, next_task
+from .reconcile import reconcile
 
 
 def dump(value):
@@ -17,6 +18,7 @@ def parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="command", required=True)
 
     sub.add_parser("init")
+    sub.add_parser("reconcile")
 
     task = sub.add_parser("task")
     task_sub = task.add_subparsers(dest="task_command", required=True)
@@ -71,6 +73,11 @@ def main() -> None:
     if args.command == "init":
         init_db(path)
         dump({"ok": True, "db": str(path)})
+        return
+
+    if args.command == "reconcile":
+        init_db(path)
+        dump(reconcile(path=path))
         return
 
     if args.task_command == "create":
