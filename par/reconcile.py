@@ -78,13 +78,15 @@ def reconcile(*, path: Path = DEFAULT_DB) -> dict[str, Any]:
                         "action": "materialize",
                     })
 
-        if latest_run and latest_run["status"] == "running" and task["status"] != "claimed":
-            findings.append({
-                "type": "orphan_running_run",
-                "task_id": task["id"],
-                "run_id": latest_run["id"],
-                "action": "inspect_state_mismatch",
-            })
+        if task["status"] != "claimed":
+            for run in task_runs:
+                if run["status"] == "running":
+                    findings.append({
+                        "type": "orphan_running_run",
+                        "task_id": task["id"],
+                        "run_id": run["id"],
+                        "action": "inspect_state_mismatch",
+                    })
 
     return {
         "healthy_idle": len(findings) == 0,
