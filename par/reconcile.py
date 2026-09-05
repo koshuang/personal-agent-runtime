@@ -66,7 +66,14 @@ def reconcile(*, path: Path = DEFAULT_DB) -> dict[str, Any]:
             if task.get("next_action"):
                 active_successor = any(
                     other["id"] != task["id"]
-                    and other["status"] in {"pending", "claimed"}
+                    and (
+                        other["status"] == "pending"
+                        or (
+                            other["status"] == "claimed"
+                            and other.get("lease_expires_at")
+                            and other["lease_expires_at"] >= now
+                        )
+                    )
                     and task["next_action"] in (other.get("goal") or "")
                     for other in tasks
                 )
