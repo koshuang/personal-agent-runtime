@@ -8,6 +8,9 @@ version = "0.1.0"
 description = "Minimal persistent shared state runtime for interchangeable AI workers"
 requires-python = ">=3.11"
 
+[tool.setuptools.packages.find]
+include = ["par*"]
+
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
