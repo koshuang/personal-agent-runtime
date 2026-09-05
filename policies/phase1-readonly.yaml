@@ -1,0 +1,39 @@
+version: 1
+name: phase1-readonly
+default_mode: read-only
+
+allowed:
+  repositories:
+    - imhere-tw/avtime-backend
+  operations:
+    - read_repository_metadata
+    - read_pull_requests
+    - read_ci_checks
+    - read_reviews
+    - read_review_threads
+    - read_issues
+
+forbidden:
+  operations:
+    - write_repository
+    - push
+    - merge
+    - deploy
+    - production_write
+    - rerun_production_job
+  credentials:
+    - aws
+    - production_database
+    - stripe
+    - company_paid_api
+
+cost:
+  paid_api_usd_daily: 0
+  preferred:
+    - deterministic
+    - subscription_quota
+
+human_approval_required_for:
+  - any_repository_write
+  - any_production_access
+  - any_paid_api_usage
