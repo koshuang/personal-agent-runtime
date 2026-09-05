@@ -45,6 +45,43 @@ def test_reconcile_reports_completion_evidence_and_next_action_gaps(tmp_path):
     assert "unmaterialized_next_action" in types
 
 
+def test_reconcile_treats_expired_claimed_successor_as_unmaterialized(tmp_path):
+    db = tmp_path / "runtime.db"
+    init_db(db)
+    parent = create_task(goal="parent", path=db)
+    parent_run = claim_task(task_id=parent["id"], worker="codex-parent", path=db)
+    complete_task(
+        task_id=parent["id"],
+        run_id=parent_run["run_id"],
+        worker="codex-parent",
+        summary="done",
+        evidence=[{"type": "test", "result": "pass"}],
+        next_action="verify in fresh session",
+        path=db,
+    )
+
+    successor = create_task(goal="verify in fresh session", path=db)
+    claim_task(task_id=successor["id"], worker="codex-successor", lease_minutes=1, path=db)
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "UPDATE tasks SET lease_expires_at=? WHERE id=?",
+            (
+                (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat(),
+                successor["id"],
+            ),
+        )
+
+    result = reconcile(path=db)
+    assert any(
+        finding["type"] == "unmaterialized_next_action" and finding["task_id"] == parent["id"]
+        for finding in result["findings"]
+    )
+    assert any(
+        finding["type"] == "stale_lease" and finding["task_id"] == successor["id"]
+        for finding in result["findings"]
+    )
+
+
 def test_reconcile_reports_older_orphan_run_after_reclaim_completes(tmp_path):
     db = tmp_path / "runtime.db"
     init_db(db)
