@@ -36,14 +36,29 @@ type Verifier interface {
 	Verify(context.Context, WorkerInput, WorkerResult) error
 }
 
-type Runner struct {
-	tasks    *task.Service
-	worker   Worker
-	verifier Verifier
+type ArtifactWriter interface {
+	Put(context.Context, string, string, []byte) (string, error)
 }
 
-func NewRunner(tasks *task.Service, worker Worker, verifier Verifier) *Runner {
-	return &Runner{tasks: tasks, worker: worker, verifier: verifier}
+type RunnerOption func(*Runner)
+
+func WithArtifactWriter(writer ArtifactWriter) RunnerOption {
+	return func(r *Runner) { r.artifacts = writer }
+}
+
+type Runner struct {
+	tasks     *task.Service
+	worker    Worker
+	verifier  Verifier
+	artifacts ArtifactWriter
+}
+
+func NewRunner(tasks *task.Service, worker Worker, verifier Verifier, opts ...RunnerOption) *Runner {
+	r := &Runner{tasks: tasks, worker: worker, verifier: verifier}
+	for _, opt := range opts {
+		opt(r)
+	}
+	return r
 }
 
 func (r *Runner) Run(ctx context.Context, taskID string) error {
@@ -66,6 +81,18 @@ func (r *Runner) Run(ctx context.Context, taskID string) error {
 	}
 	if err := r.verifier.Verify(ctx, input, result); err != nil {
 		return errors.Join(ErrVerificationFailed, err, r.persistFailure(taskID, "verifying", "verification"))
+	}
+
+	verifiedPayload, err := json.Marshal(result)
+	if err != nil {
+		return errors.Join(err, r.persistFailure(taskID, "verifying", "result"))
+	}
+	if r.artifacts != nil {
+		ref, err := r.artifacts.Put(ctx, taskID, "worker-result.json", verifiedPayload)
+		if err != nil {
+			return errors.Join(err, r.persistFailure(taskID, "verifying", "artifact"))
+		}
+		result.Artifacts = append(result.Artifacts, ref)
 	}
 
 	payload, err := json.Marshal(result)
