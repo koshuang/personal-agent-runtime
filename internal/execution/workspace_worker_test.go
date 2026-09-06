@@ -91,9 +91,38 @@ func TestReadOnlyWorkspaceWorkerRejectsSymlinkEscape(t *testing.T) {
 	}
 }
 
+func TestReadOnlyWorkspaceWorkerRejectsSymlinkReplacementAfterConstruction(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	inside := filepath.Join(root, "target.txt")
+	if err := os.WriteFile(inside, []byte("safe"), 0o644); err != nil {
+		t.Fatalf("write safe fixture: %v", err)
+	}
+	secret := filepath.Join(outside, "secret.txt")
+	if err := os.WriteFile(secret, []byte("secret"), 0o644); err != nil {
+		t.Fatalf("write secret: %v", err)
+	}
+	worker, err := NewReadOnlyWorkspaceWorker(root)
+	if err != nil {
+		t.Fatalf("new worker: %v", err)
+	}
+	if err := os.Remove(inside); err != nil {
+		t.Fatalf("remove safe fixture: %v", err)
+	}
+	if err := os.Symlink(secret, inside); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	if _, err := worker.Run(context.Background(), WorkerInput{Prompt: "read target.txt"}); err == nil {
+		t.Fatal("expected replacement symlink escape rejection")
+	}
+}
+
 func TestReadOnlyWorkspaceWorkerRejectsOversizedFile(t *testing.T) {
 	root := t.TempDir()
 	payload := make([]byte, maxWorkspaceReadBytes+1)
+	for i := range payload {
+		payload[i] = 'a'
+	}
 	if err := os.WriteFile(filepath.Join(root, "large.txt"), payload, 0o644); err != nil {
 		t.Fatalf("write fixture: %v", err)
 	}
@@ -103,5 +132,19 @@ func TestReadOnlyWorkspaceWorkerRejectsOversizedFile(t *testing.T) {
 	}
 	if _, err := worker.Run(context.Background(), WorkerInput{Prompt: "read large.txt"}); err == nil {
 		t.Fatal("expected read limit rejection")
+	}
+}
+
+func TestReadOnlyWorkspaceWorkerRejectsInvalidUTF8(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "invalid.txt"), []byte{0xff, 0xfe, 'x'}, 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	worker, err := NewReadOnlyWorkspaceWorker(root)
+	if err != nil {
+		t.Fatalf("new worker: %v", err)
+	}
+	if _, err := worker.Run(context.Background(), WorkerInput{Prompt: "read invalid.txt"}); err == nil {
+		t.Fatal("expected invalid UTF-8 rejection")
 	}
 }
