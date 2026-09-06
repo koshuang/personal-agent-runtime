@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 from .db import DEFAULT_DB, claim_task, complete_task, create_task, fail_task, get_task, heartbeat, init_db, next_task
+from .portability import export_state, restore_state
 from .reconcile import reconcile
 
 
@@ -19,6 +20,13 @@ def parser() -> argparse.ArgumentParser:
 
     sub.add_parser("init")
     sub.add_parser("reconcile")
+
+    state = sub.add_parser("state")
+    state_sub = state.add_subparsers(dest="state_command", required=True)
+    export = state_sub.add_parser("export")
+    export.add_argument("artifact")
+    restore = state_sub.add_parser("restore")
+    restore.add_argument("artifact")
 
     task = sub.add_parser("task")
     task_sub = task.add_subparsers(dest="task_command", required=True)
@@ -78,6 +86,14 @@ def main() -> None:
     if args.command == "reconcile":
         init_db(path)
         dump(reconcile(path=path))
+        return
+
+    if args.command == "state":
+        artifact = Path(args.artifact)
+        if args.state_command == "export":
+            dump({"ok": True, "artifact": str(artifact), "manifest": export_state(path, artifact)})
+        elif args.state_command == "restore":
+            dump({"ok": True, "db": str(path), "manifest": restore_state(artifact, path)})
         return
 
     if args.task_command == "create":
