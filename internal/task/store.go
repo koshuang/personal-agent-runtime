@@ -56,6 +56,8 @@ CREATE TABLE IF NOT EXISTS api_tasks (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_api_tasks_status_created_at
+ON api_tasks(status, created_at);
 `)
 	return err
 }
