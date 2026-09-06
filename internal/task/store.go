@@ -56,6 +56,8 @@ CREATE TABLE IF NOT EXISTS api_tasks (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_api_tasks_status_created_at
+ON api_tasks(status, created_at);
 `)
 	return err
 }
@@ -87,6 +89,42 @@ func (s *Store) Get(ctx context.Context, id string) (Task, error) {
 	t.CreatedAt, _ = time.Parse(time.RFC3339Nano, created)
 	t.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updated)
 	return t, nil
+}
+
+func (s *Store) ListQueued(ctx context.Context, limit int) ([]Task, error) {
+	if limit <= 0 {
+		return []Task{}, nil
+	}
+	rows, err := s.db.QueryContext(ctx, `
+SELECT id,prompt,status,stage,progress,result,created_at,updated_at
+FROM api_tasks
+WHERE status='queued'
+ORDER BY created_at ASC
+LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]Task, 0, limit)
+	for rows.Next() {
+		var t Task
+		var created, updated string
+		var result sql.NullString
+		if err := rows.Scan(&t.ID, &t.Prompt, &t.Status, &t.Stage, &t.Progress, &result, &created, &updated); err != nil {
+			return nil, err
+		}
+		if result.Valid {
+			t.Result = &result.String
+		}
+		t.CreatedAt, _ = time.Parse(time.RFC3339Nano, created)
+		t.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updated)
+		out = append(out, t)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (s *Store) UpdateState(ctx context.Context, id, expectedStatus, status, stage string, progress int, result *string) error {

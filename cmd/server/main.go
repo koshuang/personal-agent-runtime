@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/koshuang/personal-agent-runtime/internal/execution"
 	"github.com/koshuang/personal-agent-runtime/internal/mcpserver"
 	"github.com/koshuang/personal-agent-runtime/internal/task"
 )
@@ -37,6 +39,12 @@ func main() {
 	defer store.Close()
 
 	tasks := task.NewService(store)
+	runner := execution.NewRunner(tasks, execution.EchoWorker{}, execution.DeterministicVerifier{})
+	dispatcher := execution.NewDispatcher(tasks, runner)
+	dispatchCtx, cancelDispatch := context.WithCancel(context.Background())
+	defer cancelDispatch()
+	go dispatcher.Run(dispatchCtx)
+
 	s := &server{tasks: tasks}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.health)
@@ -47,7 +55,7 @@ func main() {
 	mux.Handle("/mcp", mcpserver.New(tasks))
 
 	addr := env("PAR_ADDR", "127.0.0.1:8080")
-	log.Printf("personal-agent-runtime API listening on %s (db=%s, mcp=/mcp)", addr, dbPath)
+	log.Printf("personal-agent-runtime API listening on %s (db=%s, mcp=/mcp, dispatcher=enabled)", addr, dbPath)
 	httpServer := newHTTPServer(addr, mux)
 	log.Fatal(httpServer.ListenAndServe())
 }
