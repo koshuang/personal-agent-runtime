@@ -56,6 +56,10 @@ func (s *Service) Cancel(ctx context.Context, id string) error {
 	return s.store.Cancel(ctx, id)
 }
 
+func (s *Service) UpdateState(ctx context.Context, id, status, stage string, progress int, result *string) error {
+	return s.store.UpdateState(ctx, id, status, stage, progress, result)
+}
+
 func (s *Service) Result(ctx context.Context, id string) (Task, error) {
 	t, err := s.store.Get(ctx, id)
 	if err != nil {
