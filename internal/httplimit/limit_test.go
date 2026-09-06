@@ -50,6 +50,40 @@ func TestLimiterRejectsAfterBurstAndRefills(t *testing.T) {
 	}
 }
 
+func TestPreflightDoesNotConsumeQuota(t *testing.T) {
+	now := time.Unix(0, 0)
+	limiter, err := newWithClock(60, 1, func() time.Time { return now })
+	if err != nil {
+		t.Fatalf("new limiter: %v", err)
+	}
+	calls := 0
+	handler := limiter.Middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	preflight := httptest.NewRecorder()
+	handler.ServeHTTP(preflight, httptest.NewRequest(http.MethodOptions, "/mcp", nil))
+	if preflight.Code != http.StatusNoContent {
+		t.Fatalf("preflight status=%d", preflight.Code)
+	}
+
+	firstAction := httptest.NewRecorder()
+	handler.ServeHTTP(firstAction, httptest.NewRequest(http.MethodPost, "/mcp", nil))
+	if firstAction.Code != http.StatusNoContent {
+		t.Fatalf("first action status=%d", firstAction.Code)
+	}
+
+	secondAction := httptest.NewRecorder()
+	handler.ServeHTTP(secondAction, httptest.NewRequest(http.MethodPost, "/mcp", nil))
+	if secondAction.Code != http.StatusTooManyRequests {
+		t.Fatalf("second action status=%d", secondAction.Code)
+	}
+	if calls != 2 {
+		t.Fatalf("downstream calls=%d want 2 (preflight + first action)", calls)
+	}
+}
+
 func TestNewRejectsInvalidConfiguration(t *testing.T) {
 	if _, err := New(0, 1); err == nil {
 		t.Fatal("expected invalid requests-per-minute error")
