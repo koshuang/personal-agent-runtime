@@ -11,8 +11,9 @@ import (
 )
 
 var (
-	ErrNotFound = errors.New("task not found")
-	ErrTerminal = errors.New("task is already terminal")
+	ErrNotFound      = errors.New("task not found")
+	ErrTerminal      = errors.New("task is already terminal")
+	ErrStateConflict = errors.New("task state changed concurrently")
 )
 
 type Task struct {
@@ -88,19 +89,29 @@ func (s *Store) Get(ctx context.Context, id string) (Task, error) {
 	return t, nil
 }
 
-func (s *Store) UpdateState(ctx context.Context, id, status, stage string, progress int, result *string) error {
+func (s *Store) UpdateState(ctx context.Context, id, expectedStatus, status, stage string, progress int, result *string) error {
 	res, err := s.db.ExecContext(ctx,
-		`UPDATE api_tasks SET status=?,stage=?,progress=?,result=?,updated_at=? WHERE id=?`,
-		status, stage, progress, result, time.Now().UTC().Format(time.RFC3339Nano), id,
+		`UPDATE api_tasks SET status=?,stage=?,progress=?,result=?,updated_at=? WHERE id=? AND status=?`,
+		status, stage, progress, result, time.Now().UTC().Format(time.RFC3339Nano), id, expectedStatus,
 	)
 	if err != nil {
 		return err
 	}
-	n, _ := res.RowsAffected()
-	if n == 0 {
-		return ErrNotFound
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
 	}
-	return nil
+	if n > 0 {
+		return nil
+	}
+
+	var currentStatus string
+	if err := s.db.QueryRowContext(ctx, `SELECT status FROM api_tasks WHERE id=?`, id).Scan(&currentStatus); errors.Is(err, sql.ErrNoRows) {
+		return ErrNotFound
+	} else if err != nil {
+		return fmt.Errorf("check task after state update: %w", err)
+	}
+	return fmt.Errorf("%w: expected %s, got %s", ErrStateConflict, expectedStatus, currentStatus)
 }
 
 func (s *Store) Cancel(ctx context.Context, id string) error {
