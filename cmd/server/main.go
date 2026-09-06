@@ -14,10 +14,7 @@ import (
 	"github.com/koshuang/personal-agent-runtime/internal/task"
 )
 
-const (
-	maxTaskRequestBytes = 32 * 1024
-	maxPromptBytes      = 16 * 1024
-)
+const maxTaskRequestBytes = 32 * 1024
 
 type server struct{ tasks *task.Service }
 
@@ -46,7 +43,7 @@ func main() {
 	mux.HandleFunc("POST /v1/tasks/{id}/cancel", s.cancelTask)
 	mux.Handle("/mcp", mcpserver.New(tasks))
 
-	addr := env("PAR_ADDR", ":8080")
+	addr := env("PAR_ADDR", "127.0.0.1:8080")
 	log.Printf("personal-agent-runtime API listening on %s (db=%s, mcp=/mcp)", addr, dbPath)
 	httpServer := newHTTPServer(addr, mux)
 	log.Fatal(httpServer.ListenAndServe())
@@ -83,12 +80,16 @@ func (s *server) createTask(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "prompt is required"})
 		return
 	}
-	if len(req.Prompt) > maxPromptBytes {
-		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{"error": "prompt too large"})
+	if len(strings.TrimSpace(req.Prompt)) > task.MaxPromptBytes {
+		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{"error": task.ErrPromptTooLarge.Error()})
 		return
 	}
 	t, err := s.tasks.Create(r.Context(), req.Prompt)
 	if err != nil {
+		if errors.Is(err, task.ErrPromptTooLarge) {
+			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{"error": err.Error()})
+			return
+		}
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
 	}
