@@ -3,6 +3,7 @@ package execution
 import (
 	"context"
 	"errors"
+	"math"
 	"strings"
 )
 
@@ -37,8 +38,8 @@ func (DeterministicVerifier) Verify(_ context.Context, _ WorkerInput, result Wor
 	if strings.TrimSpace(result.Summary) == "" {
 		return errors.New("worker summary is required")
 	}
-	if result.Confidence < 0 || result.Confidence > 1 {
-		return errors.New("confidence must be between 0 and 1")
+	if math.IsNaN(result.Confidence) || math.IsInf(result.Confidence, 0) || result.Confidence < 0 || result.Confidence > 1 {
+		return errors.New("confidence must be finite and between 0 and 1")
 	}
 	if len(result.Blockers) > 0 {
 		return errors.New("worker reported blockers")
