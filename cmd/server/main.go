@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -45,10 +46,16 @@ func main() {
 		log.Fatal(err)
 	}
 
+	workerName := env("PAR_WORKER", "echo")
+	worker, err := buildWorker(workerName, env("PAR_WORKSPACE_ROOT", "."))
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	tasks := task.NewService(store)
 	runner := execution.NewRunner(
 		tasks,
-		execution.EchoWorker{},
+		worker,
 		execution.DeterministicVerifier{},
 		execution.WithArtifactWriter(artifacts),
 	)
@@ -67,9 +74,20 @@ func main() {
 	mux.Handle("/mcp", mcpserver.New(tasks))
 
 	addr := env("PAR_ADDR", "127.0.0.1:8080")
-	log.Printf("personal-agent-runtime API listening on %s (db=%s, artifacts=%s, mcp=/mcp, dispatcher=enabled)", addr, dbPath, artifactRoot)
+	log.Printf("personal-agent-runtime API listening on %s (db=%s, artifacts=%s, worker=%s, mcp=/mcp, dispatcher=enabled)", addr, dbPath, artifactRoot, workerName)
 	httpServer := newHTTPServer(addr, mux)
 	log.Fatal(httpServer.ListenAndServe())
+}
+
+func buildWorker(name, workspaceRoot string) (execution.Worker, error) {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "echo":
+		return execution.EchoWorker{}, nil
+	case "workspace":
+		return execution.NewReadOnlyWorkspaceWorker(workspaceRoot)
+	default:
+		return nil, fmt.Errorf("unsupported PAR_WORKER %q", name)
+	}
 }
 
 func newHTTPServer(addr string, handler http.Handler) *http.Server {
