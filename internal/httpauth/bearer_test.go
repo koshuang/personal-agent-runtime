@@ -21,6 +21,23 @@ func TestBearerAllowsValidToken(t *testing.T) {
 	}
 }
 
+func TestBearerAllowsOptionsPreflightWithoutAuthorization(t *testing.T) {
+	called := false
+	h := Bearer("secret", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		if r.Method != http.MethodOptions {
+			t.Fatalf("method=%s want=%s", r.Method, http.MethodOptions)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	res := httptest.NewRecorder()
+	h.ServeHTTP(res, httptest.NewRequest(http.MethodOptions, "/mcp", nil))
+	if res.Code != http.StatusNoContent || !called {
+		t.Fatalf("status=%d called=%v", res.Code, called)
+	}
+}
+
 func TestBearerRejectsMissingOrWrongToken(t *testing.T) {
 	h := Bearer("secret", http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		t.Fatal("protected handler must not be called")
