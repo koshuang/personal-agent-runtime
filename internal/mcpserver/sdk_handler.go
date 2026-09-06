@@ -1,9 +1,11 @@
 package mcpserver
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -36,9 +38,24 @@ func NewSDK(tasks *task.Service) http.Handler {
 
 func sdkRequestSizeLimit(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Body != nil {
-			r.Body = http.MaxBytesReader(w, r.Body, maxMCPRequestBytes)
+		if r.Body == nil {
+			next.ServeHTTP(w, r)
+			return
 		}
+
+		limited := http.MaxBytesReader(w, r.Body, maxMCPRequestBytes)
+		body, err := io.ReadAll(limited)
+		if err != nil {
+			var maxBytesErr *http.MaxBytesError
+			if errors.As(err, &maxBytesErr) {
+				writeHTTPJSON(w, http.StatusRequestEntityTooLarge, map[string]any{"error": "request body too large"})
+				return
+			}
+			writeHTTPJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid request body"})
+			return
+		}
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		r.ContentLength = int64(len(body))
 		next.ServeHTTP(w, r)
 	})
 }
