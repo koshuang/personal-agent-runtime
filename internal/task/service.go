@@ -52,6 +52,10 @@ func (s *Service) Get(ctx context.Context, id string) (Task, error) {
 	return s.store.Get(ctx, id)
 }
 
+func (s *Service) ListQueued(ctx context.Context, limit int) ([]Task, error) {
+	return s.store.ListQueued(ctx, limit)
+}
+
 func (s *Service) Cancel(ctx context.Context, id string) error {
 	return s.store.Cancel(ctx, id)
 }
