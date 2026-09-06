@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -51,11 +53,23 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	maxCostUSD, err := nonNegativeFloatEnv("PAR_MAX_COST_USD", 0)
+	if err != nil {
+		log.Fatal(err)
+	}
+	router, err := execution.NewRouter(maxCostUSD, execution.RouteCandidate{
+		Name:             workerName,
+		Worker:           worker,
+		EstimatedCostUSD: 0,
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	tasks := task.NewService(store)
 	runner := execution.NewRunner(
 		tasks,
-		worker,
+		router,
 		execution.DeterministicVerifier{},
 		execution.WithArtifactWriter(artifacts),
 	)
@@ -74,7 +88,7 @@ func main() {
 	mux.Handle("/mcp", mcpserver.New(tasks))
 
 	addr := env("PAR_ADDR", "127.0.0.1:8080")
-	log.Printf("personal-agent-runtime API listening on %s (db=%s, artifacts=%s, worker=%s, mcp=/mcp, dispatcher=enabled)", addr, dbPath, artifactRoot, workerName)
+	log.Printf("personal-agent-runtime API listening on %s (db=%s, artifacts=%s, worker=%s, max_cost_usd=%g, mcp=/mcp, dispatcher=enabled)", addr, dbPath, artifactRoot, workerName, maxCostUSD)
 	httpServer := newHTTPServer(addr, mux)
 	log.Fatal(httpServer.ListenAndServe())
 }
@@ -88,6 +102,18 @@ func buildWorker(name, workspaceRoot string) (execution.Worker, error) {
 	default:
 		return nil, fmt.Errorf("unsupported PAR_WORKER %q", name)
 	}
+}
+
+func nonNegativeFloatEnv(key string, fallback float64) (float64, error) {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback, nil
+	}
+	parsed, err := strconv.ParseFloat(value, 64)
+	if err != nil || parsed < 0 || math.IsNaN(parsed) || math.IsInf(parsed, 0) {
+		return 0, fmt.Errorf("%s must be a finite non-negative number", key)
+	}
+	return parsed, nil
 }
 
 func newHTTPServer(addr string, handler http.Handler) *http.Server {
