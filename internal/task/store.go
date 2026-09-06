@@ -10,6 +10,11 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+var (
+	ErrNotFound = errors.New("task not found")
+	ErrTerminal = errors.New("task is already terminal")
+)
+
 type Task struct {
 	ID        string    `json:"task_id"`
 	Prompt    string    `json:"prompt"`
@@ -70,7 +75,7 @@ func (s *Store) Get(ctx context.Context, id string) (Task, error) {
 		`SELECT id,prompt,status,stage,progress,result,created_at,updated_at FROM api_tasks WHERE id=?`, id,
 	).Scan(&t.ID, &t.Prompt, &t.Status, &t.Stage, &t.Progress, &result, &created, &updated)
 	if errors.Is(err, sql.ErrNoRows) {
-		return Task{}, fmt.Errorf("task not found")
+		return Task{}, ErrNotFound
 	}
 	if err != nil {
 		return Task{}, err
@@ -93,7 +98,34 @@ func (s *Store) UpdateState(ctx context.Context, id, status, stage string, progr
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
-		return fmt.Errorf("task not found")
+		return ErrNotFound
 	}
 	return nil
+}
+
+func (s *Store) Cancel(ctx context.Context, id string) error {
+	res, err := s.db.ExecContext(ctx, `
+UPDATE api_tasks
+SET status='canceled', stage='canceled', updated_at=?
+WHERE id=? AND status NOT IN ('completed','failed','canceled')`,
+		time.Now().UTC().Format(time.RFC3339Nano), id,
+	)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n > 0 {
+		return nil
+	}
+
+	var exists int
+	if err := s.db.QueryRowContext(ctx, `SELECT 1 FROM api_tasks WHERE id=?`, id).Scan(&exists); errors.Is(err, sql.ErrNoRows) {
+		return ErrNotFound
+	} else if err != nil {
+		return fmt.Errorf("check task after cancel: %w", err)
+	}
+	return ErrTerminal
 }
