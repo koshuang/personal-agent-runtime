@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -109,8 +110,8 @@ func nonNegativeFloatEnv(key string, fallback float64) (float64, error) {
 		return fallback, nil
 	}
 	parsed, err := strconv.ParseFloat(value, 64)
-	if err != nil || parsed < 0 {
-		return 0, fmt.Errorf("%s must be a non-negative number", key)
+	if err != nil || parsed < 0 || math.IsNaN(parsed) || math.IsInf(parsed, 0) {
+		return 0, fmt.Errorf("%s must be a finite non-negative number", key)
 	}
 	return parsed, nil
 }
