@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/koshuang/personal-agent-runtime/internal/task"
@@ -128,5 +129,18 @@ func TestOfficialSDKUnapprovedOriginIsForbidden(t *testing.T) {
 	h.ServeHTTP(res, req)
 	if res.Code != http.StatusForbidden {
 		t.Fatalf("status=%d want=%d", res.Code, http.StatusForbidden)
+	}
+}
+
+func TestOfficialSDKRejectsOversizedRequestBody(t *testing.T) {
+	h, _ := newSDKTestHandler(t)
+	body := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"submit_task","arguments":{"prompt":"` + strings.Repeat("x", maxMCPRequestBytes) + `"}}}`
+	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	res := httptest.NewRecorder()
+	h.ServeHTTP(res, req)
+	if res.Code == http.StatusOK {
+		t.Fatalf("oversized request unexpectedly succeeded: %s", res.Body.String())
 	}
 }
