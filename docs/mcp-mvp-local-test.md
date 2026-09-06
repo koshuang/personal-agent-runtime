@@ -21,22 +21,22 @@ go run ./cmd/server
 
 預設：
 
-- HTTP: `http://localhost:8080`
-- MCP: `http://localhost:8080/mcp`
+- HTTP: `http://127.0.0.1:8080`
+- MCP: `http://127.0.0.1:8080/mcp`
 - SQLite: `.par/runtime-go.db`
 
-可用 `PAR_ADDR` 與 `PAR_DB` 覆寫。
+可用 `PAR_ADDR` 與 `PAR_DB` 覆寫。預設刻意只綁定 loopback；不要把 `PAR_ADDR` 改成 public listener，除非前方已有明確的 authentication、request/storage quota、rate limiting 與 retention policy。
 
 ## Health check
 
 ```bash
-curl -sS http://localhost:8080/healthz
+curl -sS http://127.0.0.1:8080/healthz
 ```
 
 ## HTTP API：建立任務
 
 ```bash
-curl -sS -X POST http://localhost:8080/v1/tasks \
+curl -sS -X POST http://127.0.0.1:8080/v1/tasks \
   -H 'content-type: application/json' \
   -d '{"prompt":"inspect this runtime and return a short health summary"}'
 ```
@@ -46,13 +46,13 @@ curl -sS -X POST http://localhost:8080/v1/tasks \
 ## HTTP API：查詢任務
 
 ```bash
-curl -sS http://localhost:8080/v1/tasks/<task_id>
+curl -sS http://127.0.0.1:8080/v1/tasks/<task_id>
 ```
 
 ## MCP：initialize
 
 ```bash
-curl -sS -X POST http://localhost:8080/mcp \
+curl -sS -X POST http://127.0.0.1:8080/mcp \
   -H 'content-type: application/json' \
   -H 'accept: application/json, text/event-stream' \
   -d '{
@@ -77,7 +77,7 @@ curl -sS -X POST http://localhost:8080/mcp \
 ## MCP：列出工具
 
 ```bash
-curl -sS -X POST http://localhost:8080/mcp \
+curl -sS -X POST http://127.0.0.1:8080/mcp \
   -H 'content-type: application/json' \
   -H 'accept: application/json, text/event-stream' \
   -d '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
@@ -95,7 +95,7 @@ curl -sS -X POST http://localhost:8080/mcp \
 ## MCP：建立 task
 
 ```bash
-curl -sS -X POST http://localhost:8080/mcp \
+curl -sS -X POST http://127.0.0.1:8080/mcp \
   -H 'content-type: application/json' \
   -d '{
     "jsonrpc":"2.0",
@@ -118,31 +118,20 @@ curl -sS -X POST http://localhost:8080/mcp \
 4. 用同一個 `task_id` 查詢。
 5. 任務仍存在即代表 state 已跨 process restart 保留。
 
-## Cloudflare Tunnel / ChatGPT Developer Mode
+## ChatGPT Developer Mode / 遠端 MCP boundary
 
-若本機 `8080` 已透過 Cloudflare Tunnel 暴露，例如：
+v0.1 的 Runtime 本身目前**不是 public multi-tenant service**。它沒有內建 per-principal authentication、request/storage quota 或 task retention，因此不得直接以 unauthenticated public tunnel 暴露 `/mcp`。
 
-```text
-https://<your-tunnel>.trycloudflare.com
-```
+若要讓 ChatGPT 從外部連入，必須由受信任的 access gateway / tunnel policy 提供至少：
 
-ChatGPT 自訂 MCP / Plugin 的 endpoint 應填：
+- authentication；
+- 限制只有 Kos / 明確授權 principal 可進入；
+- rate limiting / request quota；
+- 避免任意 public client 建立 durable task。
 
-```text
-https://<your-tunnel>.trycloudflare.com/mcp
-```
+Runtime 仍維持 loopback listener，由 gateway 代理到 `http://127.0.0.1:8080/mcp`。MCP handler 也只允許無 `Origin` 的 server-to-server request 或 loopback browser origin，不回傳 wildcard CORS。
 
-不要填 `/healthz` 或 `/v1/tasks`。
-
-在 ChatGPT Scan Tools 前，先確認：
-
-```bash
-curl -sS https://<your-tunnel>.trycloudflare.com/healthz
-```
-
-以及用上面的 initialize / tools/list payload 對公開 `/mcp` 執行一次。
-
-OpenAI 官方建議以 Streamable HTTP MCP endpoint（通常為 `/mcp`）先完成 initialization、tool list、tool call、schema、annotations 與 error 驗證，再接 ChatGPT Developer Mode。
+在這些 protection 尚未存在前，ChatGPT external connector registration 應視為**尚未完成的 integration evidence**，不能以直接 public exposure 來繞過安全 boundary。
 
 ## 自動測試
 
@@ -150,12 +139,13 @@ OpenAI 官方建議以 Streamable HTTP MCP endpoint（通常為 `/mcp`）先完�
 go test ./...
 ```
 
-CI 會驗證 HTTP API 與 MCP 的核心行為，包括 initialize、tools/list、submit/get/result-pending/cancel，以及 SQLite persistence。
+CI 會驗證 HTTP API 與 MCP 的核心行為，包括 initialize、tools/list、submit/get/result-pending/cancel、prompt size boundary、Origin policy，以及 SQLite persistence。
 
 ## 目前刻意尚未完成
 
 - Worker Adapter
 - deterministic verification
 - automatic task execution
+- Runtime-native public authentication / per-principal quota / retention
 
 這些完成並具有 E2E evidence 前，不得把 Issue #5 或 v0.1 MVP 宣告為 DONE。
