@@ -15,6 +15,11 @@ import (
 	"github.com/koshuang/personal-agent-runtime/internal/task"
 )
 
+const (
+	maxTaskRequestBytes = 32 * 1024
+	maxPromptBytes      = 16 * 1024
+)
+
 type server struct{ store *task.Store }
 
 type createTaskRequest struct {
@@ -42,7 +47,19 @@ func main() {
 
 	addr := env("PAR_ADDR", ":8080")
 	log.Printf("personal-agent-runtime API listening on %s (db=%s)", addr, dbPath)
-	log.Fatal(http.ListenAndServe(addr, mux))
+	httpServer := newHTTPServer(addr, mux)
+	log.Fatal(httpServer.ListenAndServe())
+}
+
+func newHTTPServer(addr string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
 }
 
 func (s *server) health(w http.ResponseWriter, _ *http.Request) {
@@ -50,9 +67,23 @@ func (s *server) health(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *server) createTask(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxTaskRequestBytes)
 	var req createTaskRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Prompt) == "" {
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{"error": "request body too large"})
+			return
+		}
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid request body"})
+		return
+	}
+	if strings.TrimSpace(req.Prompt) == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "prompt is required"})
+		return
+	}
+	if len(req.Prompt) > maxPromptBytes {
+		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{"error": "prompt too large"})
 		return
 	}
 	now := time.Now().UTC()
@@ -91,20 +122,19 @@ func (s *server) getResult(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) cancelTask(w http.ResponseWriter, r *http.Request) {
-	t, err := s.store.Get(r.Context(), r.PathValue("id"))
-	if err != nil {
-		writeStoreError(w, err)
+	id := r.PathValue("id")
+	if err := s.store.Cancel(r.Context(), id); err != nil {
+		switch {
+		case errors.Is(err, task.ErrNotFound):
+			writeJSON(w, http.StatusNotFound, map[string]any{"error": "task not found"})
+		case errors.Is(err, task.ErrTerminal):
+			writeJSON(w, http.StatusConflict, map[string]any{"task_id": id, "error": "task is already terminal"})
+		default:
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		}
 		return
 	}
-	if t.Status == "completed" || t.Status == "failed" || t.Status == "canceled" {
-		writeJSON(w, http.StatusConflict, map[string]any{"task_id": t.ID, "status": t.Status, "error": "task is already terminal"})
-		return
-	}
-	if err := s.store.UpdateState(r.Context(), t.ID, "canceled", "canceled", t.Progress, t.Result); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"task_id": t.ID, "status": "canceled"})
+	writeJSON(w, http.StatusOK, map[string]any{"task_id": id, "status": "canceled"})
 }
 
 func newID() string {
@@ -123,7 +153,7 @@ func env(key, fallback string) string {
 }
 
 func writeStoreError(w http.ResponseWriter, err error) {
-	if errors.Is(err, os.ErrNotExist) || strings.Contains(err.Error(), "not found") {
+	if errors.Is(err, task.ErrNotFound) || errors.Is(err, os.ErrNotExist) || strings.Contains(err.Error(), "not found") {
 		writeJSON(w, http.StatusNotFound, map[string]any{"error": "task not found"})
 		return
 	}
