@@ -16,6 +16,7 @@ import (
 
 	"github.com/koshuang/personal-agent-runtime/internal/artifact"
 	"github.com/koshuang/personal-agent-runtime/internal/execution"
+	"github.com/koshuang/personal-agent-runtime/internal/httpauth"
 	"github.com/koshuang/personal-agent-runtime/internal/mcpserver"
 	"github.com/koshuang/personal-agent-runtime/internal/task"
 )
@@ -78,17 +79,26 @@ func main() {
 	defer cancelDispatch()
 	go dispatcher.Run(dispatchCtx)
 
+	addr := env("PAR_ADDR", "127.0.0.1:8080")
+	mcpToken := strings.TrimSpace(os.Getenv("PAR_MCP_BEARER_TOKEN"))
+	if !httpauth.IsLoopbackAddress(addr) {
+		log.Fatal("direct non-loopback PAR_ADDR is disabled; bind to loopback behind a trusted HTTPS gateway")
+	}
+
 	s := &server{tasks: tasks}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.health)
-	mux.HandleFunc("POST /v1/tasks", s.createTask)
-	mux.HandleFunc("GET /v1/tasks/{id}", s.getTask)
-	mux.HandleFunc("GET /v1/tasks/{id}/result", s.getResult)
-	mux.HandleFunc("POST /v1/tasks/{id}/cancel", s.cancelTask)
-	mux.Handle("/mcp", mcpserver.New(tasks))
+	mux.Handle("POST /v1/tasks", httpauth.Bearer(mcpToken, http.HandlerFunc(s.createTask)))
+	mux.Handle("GET /v1/tasks/{id}", httpauth.Bearer(mcpToken, http.HandlerFunc(s.getTask)))
+	mux.Handle("GET /v1/tasks/{id}/result", httpauth.Bearer(mcpToken, http.HandlerFunc(s.getResult)))
+	mux.Handle("POST /v1/tasks/{id}/cancel", httpauth.Bearer(mcpToken, http.HandlerFunc(s.cancelTask)))
+	mux.Handle("/mcp", httpauth.Bearer(mcpToken, mcpserver.New(tasks)))
 
-	addr := env("PAR_ADDR", "127.0.0.1:8080")
-	log.Printf("personal-agent-runtime API listening on %s (db=%s, artifacts=%s, worker=%s, max_cost_usd=%g, mcp=/mcp, dispatcher=enabled)", addr, dbPath, artifactRoot, workerName, maxCostUSD)
+	authMode := "disabled-loopback"
+	if mcpToken != "" {
+		authMode = "bearer"
+	}
+	log.Printf("personal-agent-runtime API listening on %s (db=%s, artifacts=%s, worker=%s, max_cost_usd=%g, mcp=/mcp, auth=%s, dispatcher=enabled)", addr, dbPath, artifactRoot, workerName, maxCostUSD, authMode)
 	httpServer := newHTTPServer(addr, mux)
 	log.Fatal(httpServer.ListenAndServe())
 }
