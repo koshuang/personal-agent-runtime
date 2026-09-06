@@ -4,11 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"time"
 
 	"github.com/koshuang/personal-agent-runtime/internal/task"
 )
 
 var ErrVerificationFailed = errors.New("verification failed")
+
+const terminalUpdateTimeout = 2 * time.Second
 
 type WorkerInput struct {
 	TaskID string
@@ -48,34 +51,33 @@ func (r *Runner) Run(ctx context.Context, taskID string) error {
 	if err != nil {
 		return err
 	}
-	if err := r.tasks.UpdateState(ctx, taskID, "running", "running", 25, nil); err != nil {
+	if err := r.tasks.UpdateState(ctx, taskID, "queued", "running", "running", 25, nil); err != nil {
 		return err
 	}
 
 	input := WorkerInput{TaskID: t.ID, Prompt: t.Prompt}
 	result, err := r.worker.Run(ctx, input)
 	if err != nil {
-		_ = r.tasks.UpdateState(ctx, taskID, "failed", "worker", 100, nil)
-		return err
+		return errors.Join(err, r.persistFailure(taskID, "running", "worker"))
 	}
 
-	if err := r.tasks.UpdateState(ctx, taskID, "verifying", "verifying", 75, nil); err != nil {
+	if err := r.tasks.UpdateState(ctx, taskID, "running", "verifying", "verifying", 75, nil); err != nil {
 		return err
 	}
 	if err := r.verifier.Verify(ctx, input, result); err != nil {
-		payload, marshalErr := json.Marshal(result)
-		if marshalErr != nil {
-			return marshalErr
-		}
-		text := string(payload)
-		_ = r.tasks.UpdateState(ctx, taskID, "failed", "verification", 100, &text)
-		return errors.Join(ErrVerificationFailed, err)
+		return errors.Join(ErrVerificationFailed, err, r.persistFailure(taskID, "verifying", "verification"))
 	}
 
 	payload, err := json.Marshal(result)
 	if err != nil {
-		return err
+		return errors.Join(err, r.persistFailure(taskID, "verifying", "result"))
 	}
 	text := string(payload)
-	return r.tasks.UpdateState(ctx, taskID, "completed", "completed", 100, &text)
+	return r.tasks.UpdateState(ctx, taskID, "verifying", "completed", "completed", 100, &text)
+}
+
+func (r *Runner) persistFailure(taskID, expectedStatus, stage string) error {
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), terminalUpdateTimeout)
+	defer cancel()
+	return r.tasks.UpdateState(cleanupCtx, taskID, expectedStatus, "failed", stage, 100, nil)
 }
