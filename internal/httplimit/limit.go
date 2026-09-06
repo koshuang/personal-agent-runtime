@@ -47,9 +47,16 @@ func newWithClock(requestsPerMinute, burst int, now func() time.Time) (*Limiter,
 	}, nil
 }
 
-// Middleware rejects requests with HTTP 429 once the bucket is empty.
+// Middleware rejects requests with HTTP 429 once the bucket is empty. CORS
+// preflight is intentionally not charged because it is unauthenticated by the
+// bearer boundary and performs no application action.
 func (l *Limiter) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodOptions {
+			next.ServeHTTP(w, r)
+			return
+		}
+
 		allowed, remaining, retryAfter := l.allow()
 		w.Header().Set("RateLimit-Limit", strconv.Itoa(int(l.capacity)))
 		w.Header().Set("RateLimit-Remaining", strconv.Itoa(remaining))
