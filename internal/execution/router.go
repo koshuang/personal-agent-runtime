@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 )
 
 var ErrNoAffordableWorker = errors.New("no worker is allowed by the current cost policy")
@@ -21,8 +22,8 @@ type Router struct {
 }
 
 func NewRouter(maxCostUSD float64, candidates ...RouteCandidate) (*Router, error) {
-	if maxCostUSD < 0 {
-		return nil, errors.New("max cost must be non-negative")
+	if !finiteNonNegative(maxCostUSD) {
+		return nil, errors.New("max cost must be a finite non-negative number")
 	}
 	if len(candidates) == 0 {
 		return nil, errors.New("at least one route candidate is required")
@@ -31,8 +32,8 @@ func NewRouter(maxCostUSD float64, candidates ...RouteCandidate) (*Router, error
 		if candidate.Name == "" || candidate.Worker == nil {
 			return nil, errors.New("route candidate requires name and worker")
 		}
-		if candidate.EstimatedCostUSD < 0 {
-			return nil, errors.New("route candidate cost must be non-negative")
+		if !finiteNonNegative(candidate.EstimatedCostUSD) {
+			return nil, errors.New("route candidate cost must be a finite non-negative number")
 		}
 	}
 	return &Router{maxCostUSD: maxCostUSD, candidates: append([]RouteCandidate(nil), candidates...)}, nil
@@ -60,4 +61,8 @@ func (r *Router) Run(ctx context.Context, input WorkerInput) (WorkerResult, erro
 		return result, nil
 	}
 	return WorkerResult{}, fmt.Errorf("%w: max_cost_usd=%g", ErrNoAffordableWorker, r.maxCostUSD)
+}
+
+func finiteNonNegative(value float64) bool {
+	return value >= 0 && !math.IsNaN(value) && !math.IsInf(value, 0)
 }
