@@ -140,7 +140,7 @@ func TestOfficialSDKRejectsOversizedRequestBody(t *testing.T) {
 	req.Header.Set("Accept", "application/json, text/event-stream")
 	res := httptest.NewRecorder()
 	h.ServeHTTP(res, req)
-	if res.Code == http.StatusOK {
-		t.Fatalf("oversized request unexpectedly succeeded: %s", res.Body.String())
+	if res.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status=%d want=%d body=%s", res.Code, http.StatusRequestEntityTooLarge, res.Body.String())
 	}
 }
