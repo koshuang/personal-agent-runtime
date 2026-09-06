@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/koshuang/personal-agent-runtime/internal/task"
@@ -60,7 +61,15 @@ func New(tasks *task.Service) http.Handler {
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Access-Control-Allow-Origin", "*")
+	origin := r.Header.Get("Origin")
+	if !approvedOrigin(origin) {
+		writeHTTPJSON(w, http.StatusForbidden, map[string]any{"error": "origin not allowed"})
+		return
+	}
+	if origin != "" {
+		w.Header().Set("Access-Control-Allow-Origin", origin)
+		w.Header().Add("Vary", "Origin")
+	}
 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Accept, Mcp-Protocol-Version, Mcp-Session-Id")
 	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
 
@@ -98,7 +107,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Notifications have no id and intentionally receive no JSON-RPC response.
 	isNotification := len(req.ID) == 0 || string(req.ID) == "null"
 	if isNotification {
 		if req.Method == "notifications/initialized" || strings.HasPrefix(req.Method, "notifications/") {
@@ -138,6 +146,22 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func approvedOrigin(origin string) bool {
+	if origin == "" {
+		return true
+	}
+	u, err := url.Parse(origin)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+		return false
+	}
+	switch u.Hostname() {
+	case "localhost", "127.0.0.1", "::1":
+		return true
+	default:
+		return false
+	}
+}
+
 func (h *Handler) callTool(w http.ResponseWriter, r *http.Request, id any, raw json.RawMessage) {
 	var p callToolParams
 	if err := json.Unmarshal(raw, &p); err != nil || p.Name == "" {
@@ -150,6 +174,10 @@ func (h *Handler) callTool(w http.ResponseWriter, r *http.Request, id any, raw j
 		var args promptArgs
 		if err := json.Unmarshal(p.Arguments, &args); err != nil || strings.TrimSpace(args.Prompt) == "" {
 			writeToolError(w, id, "prompt is required")
+			return
+		}
+		if len(strings.TrimSpace(args.Prompt)) > task.MaxPromptBytes {
+			writeToolError(w, id, task.ErrPromptTooLarge.Error())
 			return
 		}
 		t, err := h.tasks.Create(r.Context(), args.Prompt)
@@ -219,7 +247,7 @@ func toolDefinitions() []map[string]any {
 		{
 			"name": "submit_task", "title": "Submit task",
 			"description": "Queue a new asynchronous task in Personal Agent Runtime. Returns a durable task_id immediately; use get_task to inspect progress later.",
-			"inputSchema": objectSchema(map[string]any{"prompt": map[string]any{"type": "string", "minLength": 1, "maxLength": 16384, "description": "The goal or work request to queue."}}, []string{"prompt"}),
+			"inputSchema": objectSchema(map[string]any{"prompt": map[string]any{"type": "string", "minLength": 1, "maxLength": task.MaxPromptBytes, "description": "The goal or work request to queue."}}, []string{"prompt"}),
 			"annotations": map[string]any{"readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": false},
 		},
 		{
@@ -262,7 +290,7 @@ func decodeTaskIDArgs(raw json.RawMessage) (taskIDArgs, bool) {
 
 func negotiateProtocolVersion(requested string) string {
 	switch requested {
-	case "2026-07-28", "2025-11-25", "2025-06-18", "2025-03-26":
+	case "2025-11-25", "2025-06-18", "2025-03-26":
 		return requested
 	default:
 		return "2025-06-18"
