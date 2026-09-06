@@ -66,7 +66,7 @@ func TestMCPWorkspaceExecutionPersistsVerifiedResultAcrossRestart(t *testing.T) 
 		dispatcher.Run(dispatchCtx)
 	}()
 
-	handler1 := mcpserver.New(service1)
+	handler1 := mcpserver.NewSDK(service1)
 	submit := mcpE2ECall(t, handler1, 1, "submit_task", map[string]any{
 		"prompt": "read README.md",
 	})
@@ -142,7 +142,7 @@ func TestMCPWorkspaceExecutionPersistsVerifiedResultAcrossRestart(t *testing.T) 
 		}
 	})
 	service2 := task.NewService(store2)
-	handler2 := mcpserver.New(service2)
+	handler2 := mcpserver.NewSDK(service2)
 
 	restarted := mcpE2ECall(t, handler2, 3, "get_task_result", map[string]any{
 		"task_id": taskID,
