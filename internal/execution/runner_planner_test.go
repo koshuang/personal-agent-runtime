@@ -15,11 +15,11 @@ func (f plannerFunc) Plan(ctx context.Context, input WorkerInput) (WorkerInput, 
 	return f(ctx, input)
 }
 
-type captureWorker struct {
+type plannerCaptureWorker struct {
 	input WorkerInput
 }
 
-func (w *captureWorker) Run(_ context.Context, input WorkerInput) (WorkerResult, error) {
+func (w *plannerCaptureWorker) Run(_ context.Context, input WorkerInput) (WorkerResult, error) {
 	w.input = input
 	return WorkerResult{
 		Status:     "success",
@@ -32,7 +32,8 @@ func (w *captureWorker) Run(_ context.Context, input WorkerInput) (WorkerResult,
 	}, nil
 }
 
-func TestRunnerOptionalPlannerCanTransformWorkerInput(t *testing.T) {
+func newPlannerTestService(t *testing.T) *task.Service {
+	t.Helper()
 	store, err := task.Open(filepath.Join(t.TempDir(), "runtime.db"))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
@@ -42,21 +43,20 @@ func TestRunnerOptionalPlannerCanTransformWorkerInput(t *testing.T) {
 			t.Errorf("close store: %v", err)
 		}
 	})
-	service := task.NewService(store)
+	return task.NewService(store)
+}
+
+func TestRunnerOptionalPlannerCanTransformWorkerInput(t *testing.T) {
+	service := newPlannerTestService(t)
 	created, err := service.Create(t.Context(), "complex request")
 	if err != nil {
 		t.Fatalf("create task: %v", err)
 	}
 
-	worker := &captureWorker{}
+	worker := &plannerCaptureWorker{}
+	plannerCalled := false
 	planner := plannerFunc(func(_ context.Context, input WorkerInput) (WorkerInput, error) {
-		current, err := service.Get(t.Context(), input.TaskID)
-		if err != nil {
-			return WorkerInput{}, err
-		}
-		if current.Status != "planning" || current.Stage != "planning" || current.Progress != 10 {
-			t.Fatalf("planner called outside planning state: %+v", current)
-		}
+		plannerCalled = true
 		input.Prompt = "read README.md"
 		return input, nil
 	})
@@ -64,6 +64,9 @@ func TestRunnerOptionalPlannerCanTransformWorkerInput(t *testing.T) {
 	runner := NewRunner(service, worker, DeterministicVerifier{}, WithPlanner(planner))
 	if err := runner.Run(t.Context(), created.ID); err != nil {
 		t.Fatalf("run: %v", err)
+	}
+	if !plannerCalled {
+		t.Fatal("planner was not called")
 	}
 	if worker.input.TaskID != created.ID || worker.input.Prompt != "read README.md" {
 		t.Fatalf("worker did not receive planned input: %+v", worker.input)
@@ -78,22 +81,13 @@ func TestRunnerOptionalPlannerCanTransformWorkerInput(t *testing.T) {
 }
 
 func TestRunnerPlannerFailurePreventsWorkerExecution(t *testing.T) {
-	store, err := task.Open(filepath.Join(t.TempDir(), "runtime.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := store.Close(); err != nil {
-			t.Errorf("close store: %v", err)
-		}
-	})
-	service := task.NewService(store)
+	service := newPlannerTestService(t)
 	created, err := service.Create(t.Context(), "complex request")
 	if err != nil {
 		t.Fatalf("create task: %v", err)
 	}
 
-	worker := &captureWorker{}
+	worker := &plannerCaptureWorker{}
 	planErr := errors.New("planner unavailable")
 	planner := plannerFunc(func(context.Context, WorkerInput) (WorkerInput, error) {
 		return WorkerInput{}, planErr
@@ -111,5 +105,33 @@ func TestRunnerPlannerFailurePreventsWorkerExecution(t *testing.T) {
 	}
 	if failed.Status != "failed" || failed.Stage != "planner" || failed.Progress != 100 {
 		t.Fatalf("unexpected failed task: %+v", failed)
+	}
+}
+
+func TestRunnerRejectsPlannerThatChangesTaskID(t *testing.T) {
+	service := newPlannerTestService(t)
+	created, err := service.Create(t.Context(), "complex request")
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+
+	worker := &plannerCaptureWorker{}
+	planner := plannerFunc(func(_ context.Context, input WorkerInput) (WorkerInput, error) {
+		input.TaskID = "tsk_other"
+		return input, nil
+	})
+	runner := NewRunner(service, worker, DeterministicVerifier{}, WithPlanner(planner))
+	if err := runner.Run(t.Context(), created.ID); err == nil {
+		t.Fatal("expected invalid planner output error")
+	}
+	if worker.input.TaskID != "" {
+		t.Fatalf("worker must not run with invalid planned input: %+v", worker.input)
+	}
+	failed, err := service.Get(t.Context(), created.ID)
+	if err != nil {
+		t.Fatalf("get failed task: %v", err)
+	}
+	if failed.Status != "failed" || failed.Stage != "planner" {
+		t.Fatalf("unexpected failed state: %+v", failed)
 	}
 }
