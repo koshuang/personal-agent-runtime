@@ -2,7 +2,10 @@ module github.com/koshuang/personal-agent-runtime
 
 go 1.24.0
 
-require modernc.org/sqlite v1.39.1
+require (
+	github.com/modelcontextprotocol/go-sdk v1.4.0
+	modernc.org/sqlite v1.39.1
+)
 
 require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
