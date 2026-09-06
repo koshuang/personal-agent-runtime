@@ -120,7 +120,7 @@ func main() {
 	mux.Handle("GET /v1/tasks/{id}", protect(http.HandlerFunc(s.getTask)))
 	mux.Handle("GET /v1/tasks/{id}/result", protect(http.HandlerFunc(s.getResult)))
 	mux.Handle("POST /v1/tasks/{id}/cancel", protect(http.HandlerFunc(s.cancelTask)))
-	mux.Handle("/mcp", protect(mcpserver.New(tasks)))
+	mux.Handle("/mcp", protect(mcpserver.NewSDK(tasks)))
 
 	authMode := "disabled-loopback"
 	if mcpToken != "" {
