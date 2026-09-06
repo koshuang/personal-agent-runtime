@@ -184,6 +184,9 @@ func TestApprovedLocalOriginIsEchoed(t *testing.T) {
 	if got := res.Header().Get("Access-Control-Allow-Origin"); got != "http://localhost:3000" {
 		t.Fatalf("access-control-allow-origin=%q", got)
 	}
+	if got := res.Header().Get("Access-Control-Allow-Headers"); !strings.Contains(got, "Authorization") {
+		t.Fatalf("access-control-allow-headers=%q missing Authorization", got)
+	}
 }
 
 func TestInitializedNotificationHasNoBody(t *testing.T) {
