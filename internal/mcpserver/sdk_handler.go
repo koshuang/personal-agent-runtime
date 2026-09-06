@@ -31,7 +31,16 @@ func NewSDK(tasks *task.Service) http.Handler {
 		JSONResponse: true,
 	})
 
-	return sdkOriginGuard(transport)
+	return sdkOriginGuard(sdkRequestSizeLimit(transport))
+}
+
+func sdkRequestSizeLimit(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Body != nil {
+			r.Body = http.MaxBytesReader(w, r.Body, maxMCPRequestBytes)
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 type sdkSubmitArgs struct {
