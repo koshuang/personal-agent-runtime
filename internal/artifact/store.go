@@ -31,11 +31,15 @@ func NewStore(root string) (*Store, error) {
 	return &Store{root: abs}, nil
 }
 
+func validSegment(segment string) bool {
+	return segment != "." && segment != ".." && safeSegment.MatchString(segment)
+}
+
 func (s *Store) Put(ctx context.Context, taskID, name string, data []byte) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	if !safeSegment.MatchString(taskID) || !safeSegment.MatchString(name) {
+	if !validSegment(taskID) || !validSegment(name) {
 		return "", errors.New("invalid artifact path segment")
 	}
 	dir := filepath.Join(s.root, taskID)
