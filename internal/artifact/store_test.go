@@ -40,6 +40,18 @@ func TestStoreRejectsTraversal(t *testing.T) {
 	if _, err := store.Put(context.Background(), "tsk_123", "../escape", []byte("x")); err == nil {
 		t.Fatal("expected invalid artifact name error")
 	}
+	if _, err := store.Put(context.Background(), ".", "result.json", []byte("x")); err == nil {
+		t.Fatal("expected dot task id rejection")
+	}
+	if _, err := store.Put(context.Background(), "..", "result.json", []byte("x")); err == nil {
+		t.Fatal("expected dot-dot task id rejection")
+	}
+	if _, err := store.Put(context.Background(), "tsk_123", ".", []byte("x")); err == nil {
+		t.Fatal("expected dot artifact name rejection")
+	}
+	if _, err := store.Put(context.Background(), "tsk_123", "..", []byte("x")); err == nil {
+		t.Fatal("expected dot-dot artifact name rejection")
+	}
 	if _, err := store.Read(context.Background(), "../escape"); err == nil {
 		t.Fatal("expected traversal read rejection")
 	}
