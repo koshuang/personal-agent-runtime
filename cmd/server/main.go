@@ -81,8 +81,8 @@ func main() {
 
 	addr := env("PAR_ADDR", "127.0.0.1:8080")
 	mcpToken := strings.TrimSpace(os.Getenv("PAR_MCP_BEARER_TOKEN"))
-	if !httpauth.IsLoopbackAddress(addr) && mcpToken == "" {
-		log.Fatal("PAR_MCP_BEARER_TOKEN is required when PAR_ADDR is not loopback")
+	if !httpauth.IsLoopbackAddress(addr) {
+		log.Fatal("direct non-loopback PAR_ADDR is disabled; bind to loopback behind a trusted HTTPS gateway")
 	}
 
 	s := &server{tasks: tasks}
