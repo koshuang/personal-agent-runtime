@@ -2,10 +2,23 @@
 
 Use this checklist only after a stable HTTPS gateway is forwarding to the runtime's loopback listener. Do not expose the runtime's cleartext listener directly to the public internet.
 
+Canonical remote hostname for this runtime:
+
+```text
+agent.koshuang.com
+```
+
+Canonical MCP endpoint:
+
+```text
+https://agent.koshuang.com/mcp
+```
+
 ## Prerequisites
 
 - runtime remains bound to `127.0.0.1`
 - the gateway terminates HTTPS and forwards only to the loopback runtime
+- `agent.koshuang.com` resolves to the trusted HTTPS gateway
 - `PAR_MCP_BEARER_TOKEN` is injected from an operator secret store or environment, never committed
 - gateway-level principal restriction and distributed rate limiting are enabled
 - runtime-level bearer authentication and request quota are enabled
@@ -13,7 +26,7 @@ Use this checklist only after a stable HTTPS gateway is forwarding to the runtim
 Set local shell variables without committing values:
 
 ```bash
-export MCP_URL='https://your-stable-host.example/mcp'
+export MCP_URL='https://agent.koshuang.com/mcp'
 export PAR_MCP_BEARER_TOKEN='...'
 ```
 
@@ -90,7 +103,7 @@ Do not weaken the runtime quota merely because an edge limit exists.
 
 ## 6. ChatGPT Developer Mode
 
-After the Inspector checks pass, add the same stable HTTPS MCP endpoint in ChatGPT Developer Mode using the configured authentication method. Scan tools and verify that the four expected tools are discovered.
+After the Inspector checks pass, add `https://agent.koshuang.com/mcp` in ChatGPT Developer Mode using the configured authentication method. Scan tools and verify that the four expected tools are discovered.
 
 Then perform one controlled read-only task through ChatGPT and retrieve its verified result. Do not enable arbitrary shell or network execution as part of this validation.
 
@@ -98,7 +111,7 @@ Then perform one controlled read-only task through ChatGPT and retrieve its veri
 
 Record only non-secret evidence:
 
-- stable hostname (no token)
+- stable hostname: `agent.koshuang.com`
 - timestamp
 - runtime commit SHA
 - MCP Inspector version
