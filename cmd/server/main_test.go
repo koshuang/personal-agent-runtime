@@ -19,7 +19,7 @@ func newTestServer(t *testing.T, dbPath string) (*server, func()) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	return &server{store: store}, func() { _ = store.Close() }
+	return &server{tasks: task.NewService(store)}, func() { _ = store.Close() }
 }
 
 func testMux(s *server) http.Handler {
