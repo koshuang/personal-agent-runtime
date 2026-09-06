@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/koshuang/personal-agent-runtime/internal/artifact"
 	"github.com/koshuang/personal-agent-runtime/internal/execution"
 	"github.com/koshuang/personal-agent-runtime/internal/mcpserver"
 	"github.com/koshuang/personal-agent-runtime/internal/task"
@@ -38,8 +39,19 @@ func main() {
 	}
 	defer store.Close()
 
+	artifactRoot := env("PAR_ARTIFACTS", ".par/artifacts")
+	artifacts, err := artifact.NewStore(artifactRoot)
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	tasks := task.NewService(store)
-	runner := execution.NewRunner(tasks, execution.EchoWorker{}, execution.DeterministicVerifier{})
+	runner := execution.NewRunner(
+		tasks,
+		execution.EchoWorker{},
+		execution.DeterministicVerifier{},
+		execution.WithArtifactWriter(artifacts),
+	)
 	dispatcher := execution.NewDispatcher(tasks, runner)
 	dispatchCtx, cancelDispatch := context.WithCancel(context.Background())
 	defer cancelDispatch()
@@ -55,7 +67,7 @@ func main() {
 	mux.Handle("/mcp", mcpserver.New(tasks))
 
 	addr := env("PAR_ADDR", "127.0.0.1:8080")
-	log.Printf("personal-agent-runtime API listening on %s (db=%s, mcp=/mcp, dispatcher=enabled)", addr, dbPath)
+	log.Printf("personal-agent-runtime API listening on %s (db=%s, artifacts=%s, mcp=/mcp, dispatcher=enabled)", addr, dbPath, artifactRoot)
 	httpServer := newHTTPServer(addr, mux)
 	log.Fatal(httpServer.ListenAndServe())
 }
