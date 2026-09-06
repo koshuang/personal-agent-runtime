@@ -1,8 +1,6 @@
 package main
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"log"
@@ -12,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/koshuang/personal-agent-runtime/internal/mcpserver"
 	"github.com/koshuang/personal-agent-runtime/internal/task"
 )
 
@@ -20,7 +19,7 @@ const (
 	maxPromptBytes      = 16 * 1024
 )
 
-type server struct{ store *task.Store }
+type server struct{ tasks *task.Service }
 
 type createTaskRequest struct {
 	Prompt string `json:"prompt"`
@@ -37,16 +36,18 @@ func main() {
 	}
 	defer store.Close()
 
-	s := &server{store: store}
+	tasks := task.NewService(store)
+	s := &server{tasks: tasks}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.health)
 	mux.HandleFunc("POST /v1/tasks", s.createTask)
 	mux.HandleFunc("GET /v1/tasks/{id}", s.getTask)
 	mux.HandleFunc("GET /v1/tasks/{id}/result", s.getResult)
 	mux.HandleFunc("POST /v1/tasks/{id}/cancel", s.cancelTask)
+	mux.Handle("/mcp", mcpserver.New(tasks))
 
 	addr := env("PAR_ADDR", ":8080")
-	log.Printf("personal-agent-runtime API listening on %s (db=%s)", addr, dbPath)
+	log.Printf("personal-agent-runtime API listening on %s (db=%s, mcp=/mcp)", addr, dbPath)
 	httpServer := newHTTPServer(addr, mux)
 	log.Fatal(httpServer.ListenAndServe())
 }
@@ -63,7 +64,7 @@ func newHTTPServer(addr string, handler http.Handler) *http.Server {
 }
 
 func (s *server) health(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "mcp": "/mcp"})
 }
 
 func (s *server) createTask(w http.ResponseWriter, r *http.Request) {
@@ -86,9 +87,8 @@ func (s *server) createTask(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{"error": "prompt too large"})
 		return
 	}
-	now := time.Now().UTC()
-	t := task.Task{ID: newID(), Prompt: req.Prompt, Status: "queued", Stage: "queued", Progress: 0, CreatedAt: now, UpdatedAt: now}
-	if err := s.store.Create(r.Context(), t); err != nil {
+	t, err := s.tasks.Create(r.Context(), req.Prompt)
+	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
 	}
@@ -96,7 +96,7 @@ func (s *server) createTask(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) getTask(w http.ResponseWriter, r *http.Request) {
-	t, err := s.store.Get(r.Context(), r.PathValue("id"))
+	t, err := s.tasks.Get(r.Context(), r.PathValue("id"))
 	if err != nil {
 		writeStoreError(w, err)
 		return
@@ -105,13 +105,13 @@ func (s *server) getTask(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) getResult(w http.ResponseWriter, r *http.Request) {
-	t, err := s.store.Get(r.Context(), r.PathValue("id"))
+	t, err := s.tasks.Result(r.Context(), r.PathValue("id"))
 	if err != nil {
+		if errors.Is(err, task.ErrResultNotReady) {
+			writeJSON(w, http.StatusConflict, map[string]any{"task_id": t.ID, "status": t.Status, "error": "result not ready"})
+			return
+		}
 		writeStoreError(w, err)
-		return
-	}
-	if t.Status != "completed" || t.Result == nil {
-		writeJSON(w, http.StatusConflict, map[string]any{"task_id": t.ID, "status": t.Status, "error": "result not ready"})
 		return
 	}
 	var result any
@@ -123,7 +123,7 @@ func (s *server) getResult(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) cancelTask(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if err := s.store.Cancel(r.Context(), id); err != nil {
+	if err := s.tasks.Cancel(r.Context(), id); err != nil {
 		switch {
 		case errors.Is(err, task.ErrNotFound):
 			writeJSON(w, http.StatusNotFound, map[string]any{"error": "task not found"})
@@ -135,14 +135,6 @@ func (s *server) cancelTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"task_id": id, "status": "canceled"})
-}
-
-func newID() string {
-	b := make([]byte, 12)
-	if _, err := rand.Read(b); err != nil {
-		panic(err)
-	}
-	return "tsk_" + hex.EncodeToString(b)
 }
 
 func env(key, fallback string) string {
