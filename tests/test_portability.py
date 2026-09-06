@@ -58,5 +58,5 @@ def test_restore_rejects_unexpected_files(tmp_path: Path) -> None:
         archive.writestr("runtime.db", b"x")
         archive.writestr("secret.txt", "must not be accepted")
 
-    with pytest.raises(ValueError, match="unexpected files"):
+    with pytest.raises(ValueError, match="unexpected or duplicate files"):
         restore_state(artifact, tmp_path / "restored.db")
