@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
@@ -72,11 +71,13 @@ type sdkCancelResult struct {
 	Status string `json:"status"`
 }
 
+func boolPtr(v bool) *bool { return &v }
+
 func registerSDKTools(server *mcp.Server, tasks *task.Service) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "submit_task",
 		Description: "Queue a new asynchronous task in Personal Agent Runtime. Returns a durable task_id immediately; use get_task to inspect progress later.",
-		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: false, IdempotentHint: false, OpenWorldHint: false},
+		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: boolPtr(false), IdempotentHint: false, OpenWorldHint: boolPtr(false)},
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args sdkSubmitArgs) (*mcp.CallToolResult, sdkSubmitResult, error) {
 		t, err := tasks.Create(ctx, args.Prompt)
 		if err != nil {
@@ -88,7 +89,7 @@ func registerSDKTools(server *mcp.Server, tasks *task.Service) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "get_task",
 		Description: "Read the persisted status, stage, progress, and metadata for a task by task_id.",
-		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, DestructiveHint: false, IdempotentHint: true, OpenWorldHint: false},
+		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, DestructiveHint: boolPtr(false), IdempotentHint: true, OpenWorldHint: boolPtr(false)},
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args sdkTaskIDArgs) (*mcp.CallToolResult, sdkTaskResult, error) {
 		t, err := tasks.Get(ctx, strings.TrimSpace(args.TaskID))
 		if err != nil {
@@ -105,7 +106,7 @@ func registerSDKTools(server *mcp.Server, tasks *task.Service) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "get_task_result",
 		Description: "Read the final result for a completed task. If it is not complete yet, returns ready=false and the current status.",
-		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, DestructiveHint: false, IdempotentHint: true, OpenWorldHint: false},
+		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, DestructiveHint: boolPtr(false), IdempotentHint: true, OpenWorldHint: boolPtr(false)},
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args sdkTaskIDArgs) (*mcp.CallToolResult, sdkGetResult, error) {
 		t, err := tasks.Result(ctx, strings.TrimSpace(args.TaskID))
 		if err != nil {
@@ -126,7 +127,7 @@ func registerSDKTools(server *mcp.Server, tasks *task.Service) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "cancel_task",
 		Description: "Cancel a queued or running task. Use only when the user explicitly wants that task stopped.",
-		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: true, IdempotentHint: false, OpenWorldHint: false},
+		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: boolPtr(true), IdempotentHint: false, OpenWorldHint: boolPtr(false)},
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args sdkTaskIDArgs) (*mcp.CallToolResult, sdkCancelResult, error) {
 		id := strings.TrimSpace(args.TaskID)
 		if err := tasks.Cancel(ctx, id); err != nil {
@@ -183,5 +184,3 @@ func sdkApprovedOrigin(origin string) bool {
 		return false
 	}
 }
-
-var _ = fmt.Sprintf
