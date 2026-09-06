@@ -50,11 +50,15 @@ def export_state(db_path: Path, artifact_path: Path) -> dict[str, object]:
 
 def restore_state(artifact_path: Path, db_path: Path) -> dict[str, object]:
     with zipfile.ZipFile(artifact_path, "r") as archive:
-        names = set(archive.namelist())
-        if names != {DB_NAME, MANIFEST_NAME}:
-            raise ValueError("portable artifact contains unexpected files")
+        entries = archive.namelist()
+        if len(entries) != 2 or set(entries) != {DB_NAME, MANIFEST_NAME}:
+            raise ValueError("portable artifact contains unexpected or duplicate files")
         manifest = json.loads(archive.read(MANIFEST_NAME))
-        if manifest.get("format") != "personal-agent-runtime-shared-state" or manifest.get("version") != ARTIFACT_VERSION:
+        if (
+            manifest.get("format") != "personal-agent-runtime-shared-state"
+            or manifest.get("version") != ARTIFACT_VERSION
+            or manifest.get("database") != DB_NAME
+        ):
             raise ValueError("unsupported portable artifact format or version")
         payload = archive.read(DB_NAME)
     digest = hashlib.sha256(payload).hexdigest()
@@ -76,6 +80,13 @@ def restore_state(artifact_path: Path, db_path: Path) -> dict[str, object]:
                 raise ValueError("restored SQLite database failed integrity_check")
         finally:
             conn.close()
+
+        # Restore is an offline operation. Remove stale WAL sidecars from a previous
+        # local database before atomically replacing the canonical DB file.
+        for suffix in ("-wal", "-shm"):
+            sidecar = Path(f"{db_path}{suffix}")
+            if sidecar.exists():
+                sidecar.unlink()
         os.replace(tmp_path, db_path)
     finally:
         if os.path.exists(tmp_name):
