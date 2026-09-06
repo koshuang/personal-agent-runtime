@@ -6,7 +6,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/koshuang/personal-agent-runtime/internal/task"
 )
@@ -28,6 +30,17 @@ func testMux(s *server) http.Handler {
 	mux.HandleFunc("GET /v1/tasks/{id}/result", s.getResult)
 	mux.HandleFunc("POST /v1/tasks/{id}/cancel", s.cancelTask)
 	return mux
+}
+
+func TestHTTPServerTimeouts(t *testing.T) {
+	h := http.NewServeMux()
+	srv := newHTTPServer(":0", h)
+	if srv.ReadHeaderTimeout <= 0 || srv.ReadTimeout <= 0 || srv.WriteTimeout <= 0 || srv.IdleTimeout <= 0 {
+		t.Fatalf("all HTTP server timeouts must be finite: %+v", srv)
+	}
+	if srv.Handler != h {
+		t.Fatal("handler wiring changed")
+	}
 }
 
 func TestHealth(t *testing.T) {
@@ -100,6 +113,13 @@ func TestCreateGetCancelTask(t *testing.T) {
 		t.Fatalf("cancel status = %d, want %d: %s", cancelRes.Code, http.StatusOK, cancelRes.Body.String())
 	}
 
+	secondCancelReq := httptest.NewRequest(http.MethodPost, "/v1/tasks/"+created.TaskID+"/cancel", nil)
+	secondCancelRes := httptest.NewRecorder()
+	mux.ServeHTTP(secondCancelRes, secondCancelReq)
+	if secondCancelRes.Code != http.StatusConflict {
+		t.Fatalf("second cancel status = %d, want %d: %s", secondCancelRes.Code, http.StatusConflict, secondCancelRes.Body.String())
+	}
+
 	getCanceledReq := httptest.NewRequest(http.MethodGet, "/v1/tasks/"+created.TaskID, nil)
 	getCanceledRes := httptest.NewRecorder()
 	mux.ServeHTTP(getCanceledRes, getCanceledReq)
@@ -135,6 +155,7 @@ func TestTaskPersistsAcrossStoreReopen(t *testing.T) {
 	}
 	close1()
 
+	time.Sleep(10 * time.Millisecond)
 	s2, close2 := newTestServer(t, db)
 	defer close2()
 	mux2 := testMux(s2)
@@ -160,10 +181,33 @@ func TestCreateTaskValidationAndNotFound(t *testing.T) {
 		t.Fatalf("blank prompt status = %d, want %d", badRes.Code, http.StatusBadRequest)
 	}
 
+	oversizedPrompt := `{"prompt":"` + strings.Repeat("x", maxPromptBytes+1) + `"}`
+	oversizedPromptReq := httptest.NewRequest(http.MethodPost, "/v1/tasks", strings.NewReader(oversizedPrompt))
+	oversizedPromptRes := httptest.NewRecorder()
+	mux.ServeHTTP(oversizedPromptRes, oversizedPromptReq)
+	if oversizedPromptRes.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized prompt status = %d, want %d", oversizedPromptRes.Code, http.StatusRequestEntityTooLarge)
+	}
+
+	oversizedBody := `{"prompt":"` + strings.Repeat("x", maxTaskRequestBytes) + `"}`
+	oversizedBodyReq := httptest.NewRequest(http.MethodPost, "/v1/tasks", strings.NewReader(oversizedBody))
+	oversizedBodyRes := httptest.NewRecorder()
+	mux.ServeHTTP(oversizedBodyRes, oversizedBodyReq)
+	if oversizedBodyRes.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized body status = %d, want %d", oversizedBodyRes.Code, http.StatusRequestEntityTooLarge)
+	}
+
 	missingReq := httptest.NewRequest(http.MethodGet, "/v1/tasks/tsk_missing", nil)
 	missingRes := httptest.NewRecorder()
 	mux.ServeHTTP(missingRes, missingReq)
 	if missingRes.Code != http.StatusNotFound {
 		t.Fatalf("missing task status = %d, want %d", missingRes.Code, http.StatusNotFound)
+	}
+
+	missingCancelReq := httptest.NewRequest(http.MethodPost, "/v1/tasks/tsk_missing/cancel", nil)
+	missingCancelRes := httptest.NewRecorder()
+	mux.ServeHTTP(missingCancelRes, missingCancelReq)
+	if missingCancelRes.Code != http.StatusNotFound {
+		t.Fatalf("missing cancel status = %d, want %d", missingCancelRes.Code, http.StatusNotFound)
 	}
 }
