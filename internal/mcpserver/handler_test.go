@@ -18,6 +18,11 @@ func newTestHandler(t *testing.T) (http.Handler, *task.Store) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("close store: %v", err)
+		}
+	})
 	return New(task.NewService(store)), store
 }
 
@@ -39,8 +44,7 @@ func rpcCall(t *testing.T, h http.Handler, body string) map[string]any {
 }
 
 func TestInitializeAndToolsList(t *testing.T) {
-	h, store := newTestHandler(t)
-	defer store.Close()
+	h, _ := newTestHandler(t)
 
 	init := rpcCall(t, h, `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","clientInfo":{"name":"test","version":"1"},"capabilities":{}}}`)
 	result := init["result"].(map[string]any)
@@ -76,8 +80,7 @@ func TestInitializeAndToolsList(t *testing.T) {
 }
 
 func TestUnsupportedFutureProtocolFallsBack(t *testing.T) {
-	h, store := newTestHandler(t)
-	defer store.Close()
+	h, _ := newTestHandler(t)
 
 	init := rpcCall(t, h, `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2026-07-28"}}`)
 	result := init["result"].(map[string]any)
@@ -88,7 +91,6 @@ func TestUnsupportedFutureProtocolFallsBack(t *testing.T) {
 
 func TestMCPTaskLifecycle(t *testing.T) {
 	h, store := newTestHandler(t)
-	defer store.Close()
 
 	submit := rpcCall(t, h, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"submit_task","arguments":{"prompt":"verify MCP bridge"}}}`)
 	submitResult := submit["result"].(map[string]any)
@@ -129,8 +131,7 @@ func TestMCPTaskLifecycle(t *testing.T) {
 }
 
 func TestOversizedPromptRejectedBeforePersistence(t *testing.T) {
-	h, store := newTestHandler(t)
-	defer store.Close()
+	h, _ := newTestHandler(t)
 
 	prompt := strings.Repeat("x", task.MaxPromptBytes+1)
 	body, err := json.Marshal(map[string]any{
@@ -153,8 +154,7 @@ func TestOversizedPromptRejectedBeforePersistence(t *testing.T) {
 }
 
 func TestUnapprovedOriginIsForbidden(t *testing.T) {
-	h, store := newTestHandler(t)
-	defer store.Close()
+	h, _ := newTestHandler(t)
 
 	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewBufferString(`{"jsonrpc":"2.0","id":1,"method":"ping"}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -171,8 +171,7 @@ func TestUnapprovedOriginIsForbidden(t *testing.T) {
 }
 
 func TestApprovedLocalOriginIsEchoed(t *testing.T) {
-	h, store := newTestHandler(t)
-	defer store.Close()
+	h, _ := newTestHandler(t)
 
 	req := httptest.NewRequest(http.MethodOptions, "/mcp", nil)
 	req.Header.Set("Origin", "http://localhost:3000")
@@ -188,8 +187,7 @@ func TestApprovedLocalOriginIsEchoed(t *testing.T) {
 }
 
 func TestInitializedNotificationHasNoBody(t *testing.T) {
-	h, store := newTestHandler(t)
-	defer store.Close()
+	h, _ := newTestHandler(t)
 
 	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewBufferString(`{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}`))
 	req.Header.Set("Content-Type", "application/json")
