@@ -15,6 +15,13 @@ func Bearer(token string, next http.Handler) http.Handler {
 		return next
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Browser CORS preflight requests intentionally omit Authorization. Let the
+		// downstream MCP handler validate Origin and emit the allowed CORS headers;
+		// all non-preflight requests still require the bearer token.
+		if r.Method == http.MethodOptions {
+			next.ServeHTTP(w, r)
+			return
+		}
 		provided := bearerToken(r.Header.Get("Authorization"))
 		if !constantTimeEqual(provided, token) {
 			w.Header().Set("WWW-Authenticate", `Bearer realm="personal-agent-runtime"`)
