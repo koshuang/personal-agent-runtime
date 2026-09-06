@@ -6,10 +6,12 @@ Phase 1 的 portability artifact 是一個 `.parstate` ZIP，目的只是在獨�
 
 Artifact 只允許兩個 entries：
 
-- `runtime.db`：由 SQLite online backup API 產生的一致 snapshot。
-- `manifest.json`：包含 `format`、`version`、database filename 與 SHA-256。
+- `runtime.db`：由 SQLite online backup API 產生的一致 snapshot；uncompressed size 上限 1 GiB。
+- `manifest.json`：包含 `format`、`version`、database filename 與 SHA-256；uncompressed size 上限 64 KiB。
 
-目前 version 為 `1`。Restore 時必須同時驗證 exact entry allowlist（包含 duplicate entry 拒絕）、format/version/database filename、SHA-256 與 SQLite `PRAGMA integrity_check`；任何不相容或損壞都 fail closed。
+目前 version 為 `1`。Restore 時必須同時驗證 exact entry allowlist（包含 duplicate entry 拒絕）、format/version/database filename、SHA-256 與 SQLite `PRAGMA integrity_check`；任何不相容或損壞都 fail closed。任何 entry 的 compression ratio 超過 100:1 也會在解壓前拒絕，避免以 portability artifact 作為 decompression bomb。
+
+Export destination 不得與 canonical SQLite database、`-wal`、`-shm` 為相同 path 或既有 inode alias，避免建立 artifact 時先截斷正在保護的 state file。
 
 ## CLI
 
@@ -19,7 +21,7 @@ python -m par --db .par/runtime.db state restore state.parstate
 python -m par --db .par/runtime.db task show <task_id>
 ```
 
-Restore 是 **offline operation**：目標 Runtime/server 不應同時開著該 database。Restore 會清除舊 database 的 WAL/SHM sidecars 後做 atomic replace，因此重複 restore 同一 artifact 不會重新建立 task/run/event/artifact identity，也不會讓舊 WAL 污染 restored snapshot。
+Restore 是 **offline operation**：目標 Runtime/server 不應同時開著該 database。若目標 database 已存在，restore 會先透過 SQLite `wal_checkpoint(TRUNCATE)` 確認既有 WAL 已安全 checkpoint；成功後才清除 WAL/SHM sidecars並做 atomic replace。若 checkpoint 無法完成則 fail closed，不會刪除 sidecar。重複 restore 同一 artifact 不會重新建立 task/run/event/artifact identity，也不會讓舊 WAL 污染 restored snapshot。
 
 ## Security boundary
 
@@ -34,4 +36,4 @@ Implementation/tests 只能證明 contract。Issue #16 與 ROADMAP Phase 1 的�
 1. 從前一 runtime export artifact。
 2. 在 fresh runtime restore。
 3. 不讀前一輪 chat transcript，直接執行 `par task show <原 task_id>`。
-4. 客觀確認原 status、evidence、blockers、next_action 與 identity 關聯仍存在。
+4. 客觀確認原 status、evidence、blockers、next_action 與 task/run/event/artifact identity 關聯仍存在。
