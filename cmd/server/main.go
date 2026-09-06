@@ -17,6 +17,7 @@ import (
 	"github.com/koshuang/personal-agent-runtime/internal/artifact"
 	"github.com/koshuang/personal-agent-runtime/internal/execution"
 	"github.com/koshuang/personal-agent-runtime/internal/httpauth"
+	"github.com/koshuang/personal-agent-runtime/internal/httplimit"
 	"github.com/koshuang/personal-agent-runtime/internal/mcpserver"
 	"github.com/koshuang/personal-agent-runtime/internal/task"
 )
@@ -24,6 +25,8 @@ import (
 const (
 	maxTaskRequestBytes = 32 * 1024
 	maxPromptBytes      = task.MaxPromptBytes
+	defaultRateLimitRPM = 120
+	defaultRateBurst    = 30
 )
 
 type server struct{ tasks *task.Service }
@@ -85,20 +88,45 @@ func main() {
 		log.Fatal("direct non-loopback PAR_ADDR is disabled; bind to loopback behind a trusted HTTPS gateway")
 	}
 
+	var authenticatedLimit *httplimit.Limiter
+	rateLimitRPM := 0
+	rateLimitBurst := 0
+	if mcpToken != "" {
+		rateLimitRPM, err = positiveIntEnv("PAR_RATE_LIMIT_RPM", defaultRateLimitRPM)
+		if err != nil {
+			log.Fatal(err)
+		}
+		rateLimitBurst, err = positiveIntEnv("PAR_RATE_LIMIT_BURST", defaultRateBurst)
+		if err != nil {
+			log.Fatal(err)
+		}
+		authenticatedLimit, err = httplimit.New(rateLimitRPM, rateLimitBurst)
+		if err != nil {
+			log.Fatal(err)
+		}
+	}
+
+	protect := func(handler http.Handler) http.Handler {
+		if authenticatedLimit != nil {
+			handler = authenticatedLimit.Middleware(handler)
+		}
+		return httpauth.Bearer(mcpToken, handler)
+	}
+
 	s := &server{tasks: tasks}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.health)
-	mux.Handle("POST /v1/tasks", httpauth.Bearer(mcpToken, http.HandlerFunc(s.createTask)))
-	mux.Handle("GET /v1/tasks/{id}", httpauth.Bearer(mcpToken, http.HandlerFunc(s.getTask)))
-	mux.Handle("GET /v1/tasks/{id}/result", httpauth.Bearer(mcpToken, http.HandlerFunc(s.getResult)))
-	mux.Handle("POST /v1/tasks/{id}/cancel", httpauth.Bearer(mcpToken, http.HandlerFunc(s.cancelTask)))
-	mux.Handle("/mcp", httpauth.Bearer(mcpToken, mcpserver.New(tasks)))
+	mux.Handle("POST /v1/tasks", protect(http.HandlerFunc(s.createTask)))
+	mux.Handle("GET /v1/tasks/{id}", protect(http.HandlerFunc(s.getTask)))
+	mux.Handle("GET /v1/tasks/{id}/result", protect(http.HandlerFunc(s.getResult)))
+	mux.Handle("POST /v1/tasks/{id}/cancel", protect(http.HandlerFunc(s.cancelTask)))
+	mux.Handle("/mcp", protect(mcpserver.New(tasks)))
 
 	authMode := "disabled-loopback"
 	if mcpToken != "" {
 		authMode = "bearer"
 	}
-	log.Printf("personal-agent-runtime API listening on %s (db=%s, artifacts=%s, worker=%s, max_cost_usd=%g, mcp=/mcp, auth=%s, dispatcher=enabled)", addr, dbPath, artifactRoot, workerName, maxCostUSD, authMode)
+	log.Printf("personal-agent-runtime API listening on %s (db=%s, artifacts=%s, worker=%s, max_cost_usd=%g, mcp=/mcp, auth=%s, rate_limit_rpm=%d, rate_limit_burst=%d, dispatcher=enabled)", addr, dbPath, artifactRoot, workerName, maxCostUSD, authMode, rateLimitRPM, rateLimitBurst)
 	httpServer := newHTTPServer(addr, mux)
 	log.Fatal(httpServer.ListenAndServe())
 }
@@ -122,6 +150,18 @@ func nonNegativeFloatEnv(key string, fallback float64) (float64, error) {
 	parsed, err := strconv.ParseFloat(value, 64)
 	if err != nil || parsed < 0 || math.IsNaN(parsed) || math.IsInf(parsed, 0) {
 		return 0, fmt.Errorf("%s must be a finite non-negative number", key)
+	}
+	return parsed, nil
+}
+
+func positiveIntEnv(key string, fallback int) (int, error) {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback, nil
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed <= 0 {
+		return 0, fmt.Errorf("%s must be a positive integer", key)
 	}
 	return parsed, nil
 }

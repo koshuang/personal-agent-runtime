@@ -24,14 +24,29 @@ This applies to `/mcp` and all `/v1/tasks` task endpoints. `/healthz` remains un
 
 Never commit the token to the repository, put it in command examples with a real value, or log it. Store it in an operator secret store or injected environment variable. Rotate it by updating the secret and restarting the runtime.
 
+## Runtime request quota
+
+When `PAR_MCP_BEARER_TOKEN` is configured, the runtime also enables a process-local token-bucket limit for all authenticated MCP and task requests. Authentication runs before rate limiting, so anonymous traffic cannot consume the authenticated principal's runtime quota.
+
+Defaults:
+
+```bash
+PAR_RATE_LIMIT_RPM=120
+PAR_RATE_LIMIT_BURST=30
+```
+
+`PAR_RATE_LIMIT_RPM` controls the refill rate in requests per minute. `PAR_RATE_LIMIT_BURST` controls the maximum short burst. Both values must be positive integers. Requests over the limit receive HTTP `429 Too Many Requests` with `Retry-After`, `RateLimit-Limit`, and `RateLimit-Remaining` headers.
+
+The quota is deliberately shared by `/mcp` and `/v1/tasks` because v0.1 has a single bearer principal. It is an in-process defense-in-depth control, not a distributed edge limiter: restarting the runtime resets the bucket and multiple runtime instances do not share counters.
+
 ## Trusted HTTPS gateway requirements
 
-The gateway is the only supported remote exposure path for v0.1. It must terminate TLS before forwarding traffic to the loopback runtime. It should also provide principal restriction, rate limiting and request quotas before forwarding to the runtime. The runtime bearer check remains a defense-in-depth boundary behind the gateway.
+The gateway is the only supported remote exposure path for v0.1. It must terminate TLS before forwarding traffic to the loopback runtime. It should also provide principal restriction, distributed rate limiting and request quotas before forwarding to the runtime. The runtime bearer check and process-local quota remain defense-in-depth boundaries behind the gateway.
 
 Browser-based MCP clients perform an unauthenticated CORS `OPTIONS` preflight before the authenticated request. The runtime therefore allows preflight requests through the bearer middleware so the MCP handler can validate `Origin` and return the allowed CORS headers; all non-preflight MCP/task requests still require the configured bearer token.
 
-A temporary Cloudflare tunnel must not directly publish an unauthenticated runtime. Before treating any tunnel or hostname as persistent infrastructure, complete Issue #14's stable HTTPS, abuse protection, MCP Inspector, and ChatGPT Developer Mode validation.
+A temporary Cloudflare tunnel must not directly publish an unauthenticated runtime. Before treating any tunnel or hostname as persistent infrastructure, complete Issue #14's stable HTTPS, MCP Inspector, and ChatGPT Developer Mode validation.
 
 ## Current limits
 
-This is single-principal static bearer authentication, not multi-tenant authorization or OAuth. It does not make arbitrary shell/network execution safe; those capabilities remain out of scope until a stronger sandbox and authorization model exist.
+This is single-principal static bearer authentication, not multi-tenant authorization or OAuth. The runtime quota is intentionally simple and process-local. Neither control makes arbitrary shell/network execution safe; those capabilities remain out of scope until a stronger sandbox and authorization model exist.
