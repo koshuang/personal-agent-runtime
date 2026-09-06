@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/koshuang/personal-agent-runtime/internal/task"
@@ -28,6 +29,10 @@ type WorkerResult struct {
 	Blockers   []string       `json:"blockers"`
 }
 
+type Planner interface {
+	Plan(context.Context, WorkerInput) (WorkerInput, error)
+}
+
 type Worker interface {
 	Run(context.Context, WorkerInput) (WorkerResult, error)
 }
@@ -46,8 +51,13 @@ func WithArtifactWriter(writer ArtifactWriter) RunnerOption {
 	return func(r *Runner) { r.artifacts = writer }
 }
 
+func WithPlanner(planner Planner) RunnerOption {
+	return func(r *Runner) { r.planner = planner }
+}
+
 type Runner struct {
 	tasks     *task.Service
+	planner   Planner
 	worker    Worker
 	verifier  Verifier
 	artifacts ArtifactWriter
@@ -66,11 +76,28 @@ func (r *Runner) Run(ctx context.Context, taskID string) error {
 	if err != nil {
 		return err
 	}
-	if err := r.tasks.UpdateState(ctx, taskID, "queued", "running", "running", 25, nil); err != nil {
+	input := WorkerInput{TaskID: t.ID, Prompt: t.Prompt}
+
+	expectedStatus := "queued"
+	if r.planner != nil {
+		if err := r.tasks.UpdateState(ctx, taskID, "queued", "planning", "planning", 10, nil); err != nil {
+			return err
+		}
+		expectedStatus = "planning"
+		planned, err := r.planner.Plan(ctx, input)
+		if err != nil {
+			return errors.Join(err, r.persistFailure(taskID, "planning", "planner"))
+		}
+		if planned.TaskID != input.TaskID || strings.TrimSpace(planned.Prompt) == "" {
+			return errors.Join(errors.New("planner returned invalid worker input"), r.persistFailure(taskID, "planning", "planner"))
+		}
+		input = planned
+	}
+
+	if err := r.tasks.UpdateState(ctx, taskID, expectedStatus, "running", "running", 25, nil); err != nil {
 		return err
 	}
 
-	input := WorkerInput{TaskID: t.ID, Prompt: t.Prompt}
 	result, err := r.worker.Run(ctx, input)
 	if err != nil {
 		return errors.Join(err, r.persistFailure(taskID, "running", "worker"))
