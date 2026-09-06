@@ -34,6 +34,14 @@ func Open(path string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// The v0.1 runtime is a single-process SQLite application. Serializing all
+	// access through one pooled connection prevents independent database/sql
+	// connections from contending on SQLite file locks while the dispatcher and
+	// API read/update the same durable state.
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+
 	s := &Store{db: db}
 	if err := s.migrate(context.Background()); err != nil {
 		db.Close()
