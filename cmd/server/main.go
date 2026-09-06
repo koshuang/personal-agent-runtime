@@ -14,7 +14,10 @@ import (
 	"github.com/koshuang/personal-agent-runtime/internal/task"
 )
 
-const maxTaskRequestBytes = 32 * 1024
+const (
+	maxTaskRequestBytes = 32 * 1024
+	maxPromptBytes      = task.MaxPromptBytes
+)
 
 type server struct{ tasks *task.Service }
 
