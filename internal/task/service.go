@@ -9,7 +9,12 @@ import (
 	"time"
 )
 
-var ErrResultNotReady = errors.New("task result not ready")
+const MaxPromptBytes = 16 * 1024
+
+var (
+	ErrResultNotReady = errors.New("task result not ready")
+	ErrPromptTooLarge = errors.New("prompt too large")
+)
 
 type Service struct {
 	store *Store
@@ -23,6 +28,9 @@ func (s *Service) Create(ctx context.Context, prompt string) (Task, error) {
 	prompt = strings.TrimSpace(prompt)
 	if prompt == "" {
 		return Task{}, errors.New("prompt is required")
+	}
+	if len(prompt) > MaxPromptBytes {
+		return Task{}, ErrPromptTooLarge
 	}
 	now := time.Now().UTC()
 	t := Task{
