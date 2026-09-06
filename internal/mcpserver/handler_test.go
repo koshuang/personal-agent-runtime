@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/koshuang/personal-agent-runtime/internal/task"
@@ -74,6 +75,17 @@ func TestInitializeAndToolsList(t *testing.T) {
 	}
 }
 
+func TestUnsupportedFutureProtocolFallsBack(t *testing.T) {
+	h, store := newTestHandler(t)
+	defer store.Close()
+
+	init := rpcCall(t, h, `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2026-07-28"}}`)
+	result := init["result"].(map[string]any)
+	if result["protocolVersion"] != "2025-06-18" {
+		t.Fatalf("protocolVersion=%v want=2025-06-18", result["protocolVersion"])
+	}
+}
+
 func TestMCPTaskLifecycle(t *testing.T) {
 	h, store := newTestHandler(t)
 	defer store.Close()
@@ -113,6 +125,65 @@ func TestMCPTaskLifecycle(t *testing.T) {
 	}
 	if persisted.Status != "canceled" {
 		t.Fatalf("persisted status=%q want=canceled", persisted.Status)
+	}
+}
+
+func TestOversizedPromptRejectedBeforePersistence(t *testing.T) {
+	h, store := newTestHandler(t)
+	defer store.Close()
+
+	prompt := strings.Repeat("x", task.MaxPromptBytes+1)
+	body, err := json.Marshal(map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name":      "submit_task",
+			"arguments": map[string]any{"prompt": prompt},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := rpcCall(t, h, string(body))
+	result := out["result"].(map[string]any)
+	if result["isError"] != true {
+		t.Fatalf("expected tool error: %#v", result)
+	}
+}
+
+func TestUnapprovedOriginIsForbidden(t *testing.T) {
+	h, store := newTestHandler(t)
+	defer store.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewBufferString(`{"jsonrpc":"2.0","id":1,"method":"ping"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Origin", "https://attacker.example")
+	res := httptest.NewRecorder()
+	h.ServeHTTP(res, req)
+
+	if res.Code != http.StatusForbidden {
+		t.Fatalf("status=%d want=%d", res.Code, http.StatusForbidden)
+	}
+	if got := res.Header().Get("Access-Control-Allow-Origin"); got != "" {
+		t.Fatalf("unexpected access-control-allow-origin=%q", got)
+	}
+}
+
+func TestApprovedLocalOriginIsEchoed(t *testing.T) {
+	h, store := newTestHandler(t)
+	defer store.Close()
+
+	req := httptest.NewRequest(http.MethodOptions, "/mcp", nil)
+	req.Header.Set("Origin", "http://localhost:3000")
+	res := httptest.NewRecorder()
+	h.ServeHTTP(res, req)
+
+	if res.Code != http.StatusNoContent {
+		t.Fatalf("status=%d want=%d", res.Code, http.StatusNoContent)
+	}
+	if got := res.Header().Get("Access-Control-Allow-Origin"); got != "http://localhost:3000" {
+		t.Fatalf("access-control-allow-origin=%q", got)
 	}
 }
 
