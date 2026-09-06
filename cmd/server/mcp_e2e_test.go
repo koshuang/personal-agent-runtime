@@ -60,13 +60,17 @@ func TestMCPWorkspaceExecutionPersistsVerifiedResultAcrossRestart(t *testing.T) 
 	)
 	dispatcher := execution.NewDispatcher(service1, runner)
 	dispatchCtx, cancelDispatch := context.WithCancel(context.Background())
-	go dispatcher.Run(dispatchCtx)
+	dispatchDone := make(chan struct{})
+	go func() {
+		defer close(dispatchDone)
+		dispatcher.Run(dispatchCtx)
+	}()
 
 	handler1 := mcpserver.New(service1)
 	submit := mcpE2ECall(t, handler1, 1, "submit_task", map[string]any{
 		"prompt": "read README.md",
 	})
-	taskID := submit["task_id"].(string)
+	taskID, _ := submit["task_id"].(string)
 	if taskID == "" || submit["status"] != "queued" {
 		t.Fatalf("unexpected submit result: %#v", submit)
 	}
@@ -84,35 +88,28 @@ func TestMCPWorkspaceExecutionPersistsVerifiedResultAcrossRestart(t *testing.T) 
 		time.Sleep(20 * time.Millisecond)
 	}
 	if final == nil {
-		t.Fatalf("task %s did not produce an MCP result before timeout", taskID)
+		persisted, getErr := service1.Get(context.Background(), taskID)
+		if getErr != nil {
+			t.Fatalf("task %s did not complete and could not be read: %v", taskID, getErr)
+		}
+		t.Fatalf("task %s did not produce an MCP result before timeout: status=%s stage=%s progress=%d", taskID, persisted.Status, persisted.Stage, persisted.Progress)
 	}
 
-	workerResult, ok := final["result"].(map[string]any)
-	if !ok {
-		t.Fatalf("unexpected final worker result: %#v", final["result"])
+	workerResult := decodeWorkerResult(t, final["result"])
+	if workerResult.Checks["worker"] != "readonly-workspace" || workerResult.Checks["route_worker"] != "workspace" {
+		t.Fatalf("unexpected worker routing evidence: %#v", workerResult.Checks)
 	}
-	checks, ok := workerResult["checks"].(map[string]any)
-	if !ok {
-		t.Fatalf("missing checks: %#v", workerResult)
+	if workerResult.Checks["content"] != "personal agent runtime e2e\n" {
+		t.Fatalf("unexpected workspace content: %#v", workerResult.Checks["content"])
 	}
-	if checks["worker"] != "readonly-workspace" || checks["route_worker"] != "workspace" {
-		t.Fatalf("unexpected worker routing evidence: %#v", checks)
+	if workerResult.Checks["max_cost_usd"] != float64(0) || workerResult.Checks["route_estimated_cost_usd"] != float64(0) {
+		t.Fatalf("expected zero-cost routing evidence: %#v", workerResult.Checks)
 	}
-	if checks["content"] != "personal agent runtime e2e\n" {
-		t.Fatalf("unexpected workspace content: %#v", checks["content"])
+	if len(workerResult.Artifacts) != 1 || workerResult.Artifacts[0] == "" {
+		t.Fatalf("unexpected artifact refs: %#v", workerResult.Artifacts)
 	}
-	if checks["max_cost_usd"] != float64(0) || checks["route_estimated_cost_usd"] != float64(0) {
-		t.Fatalf("expected zero-cost routing evidence: %#v", checks)
-	}
+	artifactRef := workerResult.Artifacts[0]
 
-	artifactRefs, ok := workerResult["artifacts"].([]any)
-	if !ok || len(artifactRefs) != 1 {
-		t.Fatalf("unexpected artifact refs: %#v", workerResult["artifacts"])
-	}
-	artifactRef, ok := artifactRefs[0].(string)
-	if !ok || artifactRef == "" {
-		t.Fatalf("invalid artifact ref: %#v", artifactRefs[0])
-	}
 	artifactBytes, err := artifacts1.Read(context.Background(), artifactRef)
 	if err != nil {
 		t.Fatalf("read execution artifact: %v", err)
@@ -126,6 +123,11 @@ func TestMCPWorkspaceExecutionPersistsVerifiedResultAcrossRestart(t *testing.T) 
 	}
 
 	cancelDispatch()
+	select {
+	case <-dispatchDone:
+	case <-time.After(time.Second):
+		t.Fatal("dispatcher did not stop before restart")
+	}
 	if err := store1.Close(); err != nil {
 		t.Fatalf("close first store: %v", err)
 	}
@@ -148,13 +150,9 @@ func TestMCPWorkspaceExecutionPersistsVerifiedResultAcrossRestart(t *testing.T) 
 	if ready, _ := restarted["ready"].(bool); !ready {
 		t.Fatalf("persisted result not ready after restart: %#v", restarted)
 	}
-	restartedResult, ok := restarted["result"].(map[string]any)
-	if !ok {
-		t.Fatalf("unexpected restarted result: %#v", restarted["result"])
-	}
-	restartedChecks := restartedResult["checks"].(map[string]any)
-	if restartedChecks["content"] != "personal agent runtime e2e\n" {
-		t.Fatalf("persisted result changed after restart: %#v", restartedChecks)
+	restartedResult := decodeWorkerResult(t, restarted["result"])
+	if restartedResult.Checks["content"] != "personal agent runtime e2e\n" {
+		t.Fatalf("persisted result changed after restart: %#v", restartedResult.Checks)
 	}
 
 	artifacts2, err := artifact.NewStore(artifactRoot)
@@ -164,6 +162,19 @@ func TestMCPWorkspaceExecutionPersistsVerifiedResultAcrossRestart(t *testing.T) 
 	if _, err := artifacts2.Read(context.Background(), artifactRef); err != nil {
 		t.Fatalf("artifact unavailable after restart: %v", err)
 	}
+}
+
+func decodeWorkerResult(t *testing.T, raw any) execution.WorkerResult {
+	t.Helper()
+	data, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatalf("marshal worker result: %v", err)
+	}
+	var result execution.WorkerResult
+	if err := json.Unmarshal(data, &result); err != nil {
+		t.Fatalf("decode worker result: %v; raw=%#v", err, raw)
+	}
+	return result
 }
 
 func mcpE2ECall(t *testing.T, h http.Handler, id int, tool string, args map[string]any) map[string]any {
