@@ -110,12 +110,15 @@ def create_task(
     priority: int = 100,
     idempotency_key: str | None = None,
     max_attempts: int = DEFAULT_MAX_ATTEMPTS,
+    actor: str = "human",
     path: Path = DEFAULT_DB,
 ) -> dict[str, Any]:
     if idempotency_key is not None and not idempotency_key.strip():
         raise ValueError("idempotency_key must be non-empty when provided")
     if max_attempts < 1:
         raise ValueError("max_attempts must be at least 1")
+    if not actor.strip():
+        raise ValueError("actor must be non-empty")
     task_id = str(uuid.uuid4())
     ts = now_iso()
     payload = json.dumps(context or {}, ensure_ascii=False)
@@ -145,7 +148,7 @@ def create_task(
             )
         conn.execute(
             "INSERT INTO events (id, task_id, type, actor, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-            (str(uuid.uuid4()), task_id, "task.created", "human", payload, ts),
+            (str(uuid.uuid4()), task_id, "task.created", actor, payload, ts),
         )
         row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
     return dict(row)
