@@ -43,10 +43,8 @@ jobs:
           CLAIM_JSON=$(python -m par --db "$DB" task claim "$TASK_ID" --worker producer-runner)
           RUN_ID=$(printf '%s' "$CLAIM_JSON" | python -c 'import json,sys; print(json.load(sys.stdin)["run_id"])')
 
-          EVIDENCE=$(python -c 'import json,os; print(json.dumps(["git-commit:" + os.environ["REPO_COMMIT"], "AGENTS.md-sha256:" + os.environ["AGENTS_SHA"]]))' \
-            REPO_COMMIT="$REPO_COMMIT" AGENTS_SHA="$AGENTS_SHA")
-          METADATA=$(python -c 'import json,os; print(json.dumps({"cost_usd":0,"credential_access":False,"target_repo_writes":0,"repository_commit":os.environ["REPO_COMMIT"],"agents_sha256":os.environ["AGENTS_SHA"]}))' \
-            REPO_COMMIT="$REPO_COMMIT" AGENTS_SHA="$AGENTS_SHA")
+          EVIDENCE=$(REPO_COMMIT="$REPO_COMMIT" AGENTS_SHA="$AGENTS_SHA" python -c 'import json,os; print(json.dumps(["git-commit:" + os.environ["REPO_COMMIT"], "AGENTS.md-sha256:" + os.environ["AGENTS_SHA"]]))')
+          METADATA=$(REPO_COMMIT="$REPO_COMMIT" AGENTS_SHA="$AGENTS_SHA" python -c 'import json,os; print(json.dumps({"cost_usd":0,"credential_access":False,"target_repo_writes":0,"repository_commit":os.environ["REPO_COMMIT"],"agents_sha256":os.environ["AGENTS_SHA"]}))')
 
           python -m par --db "$DB" task complete "$TASK_ID" \
             --run-id "$RUN_ID" \
