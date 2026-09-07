@@ -10,9 +10,15 @@ from .scheduler import decide
 COMMANDS = {"chk", "continue", "fix"}
 
 
+def _require_initialized_state(path: Path) -> None:
+    if not path.exists() or not path.is_file():
+        raise RuntimeError(f"runtime state is not initialized: {path}")
+
+
 def _projection(*, worker: str | None, path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
+    _require_initialized_state(path)
     reconciliation = reconcile(path=path)
-    scheduler = decide(worker=worker, path=path)
+    scheduler = decide(worker=worker, path=path, reconciliation=reconciliation)
     return reconciliation, scheduler
 
 
