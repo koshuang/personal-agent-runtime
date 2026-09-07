@@ -37,6 +37,20 @@ def _accepted_independent_review(task_runs: list[dict[str, Any]]) -> bool:
     return False
 
 
+def _represents_successor(parent: dict[str, Any], other: dict[str, Any], *, now: str) -> bool:
+    if other["id"] == parent["id"]:
+        return False
+    other_context = _json_obj(other.get("context_json"))
+    if other_context.get("parent_task_id") == parent["id"]:
+        return True
+    active = other["status"] == "pending" or (
+        other["status"] == "claimed"
+        and other.get("lease_expires_at")
+        and other["lease_expires_at"] >= now
+    )
+    return bool(active and parent.get("next_action") and parent["next_action"] in (other.get("goal") or ""))
+
+
 def reconcile(*, path: Path = DEFAULT_DB) -> dict[str, Any]:
     now = datetime.now(timezone.utc).isoformat()
     findings: list[dict[str, Any]] = []
@@ -83,11 +97,7 @@ def reconcile(*, path: Path = DEFAULT_DB) -> dict[str, Any]:
                 "requires_human": True,
             })
 
-        if (
-            task["status"] == "claimed"
-            and task.get("lease_expires_at")
-            and task["lease_expires_at"] < now
-        ):
+        if task["status"] == "claimed" and task.get("lease_expires_at") and task["lease_expires_at"] < now:
             findings.append({
                 "type": "stale_lease",
                 "task_id": task["id"],
@@ -129,20 +139,8 @@ def reconcile(*, path: Path = DEFAULT_DB) -> dict[str, Any]:
                 })
 
             if task.get("next_action"):
-                active_successor = any(
-                    other["id"] != task["id"]
-                    and (
-                        other["status"] == "pending"
-                        or (
-                            other["status"] == "claimed"
-                            and other.get("lease_expires_at")
-                            and other["lease_expires_at"] >= now
-                        )
-                    )
-                    and task["next_action"] in (other.get("goal") or "")
-                    for other in tasks
-                )
-                if not active_successor:
+                represented_successor = any(_represents_successor(task, other, now=now) for other in tasks)
+                if not represented_successor:
                     findings.append({
                         "type": "unmaterialized_next_action",
                         "task_id": task["id"],
