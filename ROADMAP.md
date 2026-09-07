@@ -48,24 +48,35 @@ Phase 2 exit evidence is complete. PR #54 proved a chain across multiple fresh G
 
 ## Phase 3 — Unified Active + Passive Control
 
-Status: **active**
+Status: **complete**
 
-Target capabilities:
+### Definition of Done
 
-- schedule, human command, API and webhook normalize into common events;
-- `Chk / Fix / Continue` operate on durable state instead of a specific chat session;
-- event ingestion is idempotent;
-- human approval is represented as explicit state.
+- [x] Schedule, human command, API and webhook normalize into one provider-neutral durable ingress envelope. Evidence: Issue #56 + PR #57.
+- [x] Ingress replay is idempotent and descriptive authority never becomes execution permission. Evidence: Issue #56 + PR #57.
+- [x] Human approval is represented as explicit scoped durable state with immutable approve/reject evidence. Evidence: Issue #58 + PR #59/#60.
+- [x] Safe ingress can deterministically materialize at most one queued task; gated actions fail closed unless approved evidence exactly matches subject/action/scope. Evidence: Issue #61 + PR #62.
+- [x] `Chk / Fix / Continue` operate on durable state rather than a specific chat session, remain read-only, and do not manufacture backlog or bypass downstream gates. Evidence: Issue #63 + PR #64.
+- [x] Portable Shared State preserves ingress, approval, materialization, and command outcomes across fresh runtimes.
+- [x] Exact-head CI, AVTime portability, Shared State recovery, and repeated scheduled advancement remain green through Phase 3 changes.
 
-Current direction: first define a provider-neutral ingress event envelope and one durable event-ingestion path that can represent schedule / human / API / webhook triggers without granting new execution authority. Keep Issue #14 remote MCP stable-HTTPS verification as a separate human-only boundary until `agent.koshuang.com` is configured.
+### Exit evidence
+
+Phase 3 exit evidence is complete. A fresh runtime can reconstruct provider-neutral ingress from schedule/human/API/webhook sources, evaluate explicit scoped approval evidence, deterministically decide whether one ingress event may become one queued task, and interpret `Chk / Fix / Continue` from Shared State without the previous chat transcript. The command layer is deliberately read-only; write-like or otherwise gated actions still return to the ingress → approval → materialization → scheduler/capability/review/cost boundaries instead of gaining authority from command wording.
+
+Issue #14 remote MCP stable-HTTPS / ChatGPT Developer Mode verification remains a separate human-only boundary until `agent.koshuang.com` and external credentials/gateway configuration are available. It is not Phase 3 exit evidence and is not implicitly completed by this roadmap transition.
 
 ## Phase 4 — Event-driven Runtime
+
+Status: **active**
 
 Target capabilities:
 
 - GitHub events trigger relevant tasks directly;
 - hourly schedule becomes watchdog/reconciliation rather than primary driver;
 - missed events and stale states can self-heal.
+
+Current direction: define the smallest provider-neutral event-dispatch contract first, then prove one bounded GitHub event path end to end. Preserve the existing ingress, approval, idempotency, capability, review, cost, and credential boundaries; do not introduce arbitrary shell/network execution or production automation as part of this phase transition.
 
 ## Phase 5 — Supervisor Adapters
 
