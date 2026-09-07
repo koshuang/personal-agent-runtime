@@ -4,6 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
+from .approvals import decide_approval, get_approval, list_approvals, request_approval
 from .capabilities import claim_task_if_eligible, declare_worker_capabilities, get_worker_capabilities
 from .checkpoint import resume_context, write_checkpoint
 from .db import DEFAULT_DB, complete_task, create_task, fail_task, get_task, heartbeat, init_db, next_task, retry_task
@@ -63,6 +64,29 @@ def parser() -> argparse.ArgumentParser:
     event_show.add_argument("event_id")
     event_list = event_sub.add_parser("list")
     event_list.add_argument("--limit", type=int, default=100)
+
+    approval = sub.add_parser("approval")
+    approval_sub = approval.add_subparsers(dest="approval_command", required=True)
+    approval_request = approval_sub.add_parser("request")
+    approval_request.add_argument("--idempotency-key", required=True)
+    approval_request.add_argument("--subject-type", required=True)
+    approval_request.add_argument("--subject-id", required=True)
+    approval_request.add_argument("--action", required=True)
+    approval_request.add_argument("--requested-by", required=True)
+    approval_request.add_argument("--scope", default="{}")
+    approval_show = approval_sub.add_parser("show")
+    approval_show.add_argument("approval_id")
+    approval_list = approval_sub.add_parser("list")
+    approval_list.add_argument("--status", choices=["pending", "approved", "rejected", "expired"])
+    approval_list.add_argument("--limit", type=int, default=100)
+    approval_approve = approval_sub.add_parser("approve")
+    approval_approve.add_argument("approval_id")
+    approval_approve.add_argument("--decided-by", required=True)
+    approval_approve.add_argument("--reason", required=True)
+    approval_reject = approval_sub.add_parser("reject")
+    approval_reject.add_argument("approval_id")
+    approval_reject.add_argument("--decided-by", required=True)
+    approval_reject.add_argument("--reason", required=True)
 
     worker_cmd = sub.add_parser("worker")
     worker_sub = worker_cmd.add_subparsers(dest="worker_command", required=True)
@@ -207,6 +231,40 @@ def main() -> None:
             dump(get_event(args.event_id, path=path) or {"event": None})
         elif args.event_command == "list":
             dump({"events": list_events(limit=args.limit, path=path)})
+        return
+
+    if args.command == "approval":
+        init_db(path)
+        if args.approval_command == "request":
+            dump(request_approval(
+                idempotency_key=args.idempotency_key,
+                subject_type=args.subject_type,
+                subject_id=args.subject_id,
+                action=args.action,
+                requested_by=args.requested_by,
+                scope=_json_object(args.scope, name="scope"),
+                path=path,
+            ))
+        elif args.approval_command == "show":
+            dump(get_approval(args.approval_id, path=path) or {"approval": None})
+        elif args.approval_command == "list":
+            dump({"approvals": list_approvals(status=args.status, limit=args.limit, path=path)})
+        elif args.approval_command == "approve":
+            dump(decide_approval(
+                args.approval_id,
+                decision="approved",
+                decided_by=args.decided_by,
+                reason=args.reason,
+                path=path,
+            ))
+        elif args.approval_command == "reject":
+            dump(decide_approval(
+                args.approval_id,
+                decision="rejected",
+                decided_by=args.decided_by,
+                reason=args.reason,
+                path=path,
+            ))
         return
 
     if args.command == "worker":
