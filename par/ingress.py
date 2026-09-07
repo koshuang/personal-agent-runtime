@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import uuid
 from pathlib import Path
 from typing import Any
@@ -28,19 +29,35 @@ ON ingress_events(source, created_at);
 
 
 def _ensure_schema(path: Path) -> None:
+    """Create the additive ingress schema when an ingress operation first needs it."""
     with connect(path) as conn:
         conn.executescript(_INGRESS_SCHEMA)
 
 
+def _validate_json_value(value: Any, *, name: str) -> None:
+    """Reject values that Python accepts as JSON extensions but strict consumers cannot read."""
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ValueError(f"{name} must contain only finite JSON numbers")
+    if isinstance(value, dict):
+        for nested in value.values():
+            _validate_json_value(nested, name=name)
+    elif isinstance(value, list):
+        for nested in value:
+            _validate_json_value(nested, name=name)
+
+
 def _object(value: dict[str, Any] | None, *, name: str) -> dict[str, Any]:
+    """Validate an ingress JSON-object field and return a normalized object value."""
     if value is None:
         return {}
     if not isinstance(value, dict):
         raise ValueError(f"{name} must be a JSON object")
+    _validate_json_value(value, name=name)
     return value
 
 
 def _decode(row: Any) -> dict[str, Any]:
+    """Decode one durable ingress row into the provider-neutral read model."""
     result = dict(row)
     result["payload"] = json.loads(result.pop("payload_json") or "{}")
     result["requested_action"] = json.loads(result.pop("requested_action_json") or "{}")
@@ -59,6 +76,7 @@ def ingest_event(
     authority: dict[str, Any] | None = None,
     path: Path = DEFAULT_DB,
 ) -> dict[str, Any]:
+    """Persist one non-authoritative ingress envelope with deterministic idempotency semantics."""
     key = idempotency_key.strip()
     if not key:
         raise ValueError("idempotency_key must be non-empty")
@@ -71,9 +89,10 @@ def ingest_event(
     payload_obj = _object(payload, name="payload")
     action_obj = _object(requested_action, name="requested_action")
     authority_obj = _object(authority, name="authority")
-    payload_json = json.dumps(payload_obj, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    action_json = json.dumps(action_obj, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    authority_json = json.dumps(authority_obj, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    dump_options = {"ensure_ascii": False, "sort_keys": True, "separators": (",", ":"), "allow_nan": False}
+    payload_json = json.dumps(payload_obj, **dump_options)
+    action_json = json.dumps(action_obj, **dump_options)
+    authority_json = json.dumps(authority_obj, **dump_options)
 
     _ensure_schema(path)
     event_id = str(uuid.uuid4())
@@ -110,6 +129,7 @@ def ingest_event(
 
 
 def get_event(event_id: str, *, path: Path = DEFAULT_DB) -> dict[str, Any] | None:
+    """Return one ingress event by stable event identity."""
     _ensure_schema(path)
     with connect(path) as conn:
         row = conn.execute("SELECT * FROM ingress_events WHERE id=?", (event_id,)).fetchone()
@@ -117,6 +137,7 @@ def get_event(event_id: str, *, path: Path = DEFAULT_DB) -> dict[str, Any] | Non
 
 
 def list_events(*, limit: int = 100, path: Path = DEFAULT_DB) -> list[dict[str, Any]]:
+    """List ingress events in deterministic creation order with a bounded result size."""
     if limit < 1 or limit > 1000:
         raise ValueError("limit must be between 1 and 1000")
     _ensure_schema(path)
