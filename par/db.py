@@ -3,12 +3,12 @@ from __future__ import annotations
 import json
 import sqlite3
 import uuid
-from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 DEFAULT_DB = Path(".par/runtime.db")
+ROLE_VALUES = {"orchestrator", "worker", "critic", "auditor"}
 
 SCHEMA = """
 PRAGMA journal_mode=WAL;
@@ -128,11 +128,23 @@ def next_task(*, path: Path = DEFAULT_DB) -> dict[str, Any] | None:
     return dict(row) if row else None
 
 
-def claim_task(*, task_id: str, worker: str, lease_minutes: int = 30, path: Path = DEFAULT_DB) -> dict[str, Any]:
+def claim_task(
+    *,
+    task_id: str,
+    worker: str,
+    lease_minutes: int = 30,
+    role: str = "worker",
+    provider: str | None = None,
+    model: str | None = None,
+    path: Path = DEFAULT_DB,
+) -> dict[str, Any]:
+    if role not in ROLE_VALUES:
+        raise ValueError(f"invalid role: {role}")
     now = datetime.now(timezone.utc)
     expires = (now + timedelta(minutes=lease_minutes)).isoformat()
     ts = now.isoformat()
     run_id = str(uuid.uuid4())
+    run_metadata = json.dumps({"role": role, "provider": provider, "model": model}, ensure_ascii=False)
     with connect(path) as conn:
         cur = conn.execute(
             """
@@ -148,12 +160,18 @@ def claim_task(*, task_id: str, worker: str, lease_minutes: int = 30, path: Path
         if cur.rowcount != 1:
             raise RuntimeError("task is not claimable")
         conn.execute(
-            "INSERT INTO runs (id, task_id, worker, status, started_at) VALUES (?, ?, ?, 'running', ?)",
-            (run_id, task_id, worker, ts),
+            "INSERT INTO runs (id, task_id, worker, status, metadata_json, started_at) VALUES (?, ?, ?, 'running', ?, ?)",
+            (run_id, task_id, worker, run_metadata, ts),
         )
         conn.execute(
             "INSERT INTO events (id, task_id, type, actor, payload_json, created_at) VALUES (?, ?, 'task.claimed', ?, ?, ?)",
-            (str(uuid.uuid4()), task_id, worker, json.dumps({"run_id": run_id, "lease_expires_at": expires}), ts),
+            (
+                str(uuid.uuid4()),
+                task_id,
+                worker,
+                json.dumps({"run_id": run_id, "lease_expires_at": expires, "role": role, "provider": provider, "model": model}),
+                ts,
+            ),
         )
         row = conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
     result = dict(row)
@@ -187,6 +205,15 @@ def complete_task(
 ) -> None:
     ts = now_iso()
     with connect(path) as conn:
+        task = conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+        if not task or task["status"] != "claimed" or task["claimed_by"] != worker:
+            raise RuntimeError("task is not owned by this worker")
+        run = conn.execute("SELECT * FROM runs WHERE id=? AND task_id=? AND worker=?", (run_id, task_id, worker)).fetchone()
+        if not run:
+            raise RuntimeError("run does not belong to this worker/task")
+
+        existing_metadata = json.loads(run["metadata_json"] or "{}")
+        merged_metadata = {**existing_metadata, **(metadata or {})}
         conn.execute(
             """
             UPDATE runs
@@ -197,24 +224,36 @@ def complete_task(
                 summary,
                 json.dumps(evidence or [], ensure_ascii=False),
                 json.dumps(blockers or [], ensure_ascii=False),
-                json.dumps(metadata or {}, ensure_ascii=False),
+                json.dumps(merged_metadata, ensure_ascii=False),
                 ts,
                 run_id,
                 task_id,
                 worker,
             ),
         )
+
+        context = json.loads(task["context_json"] or "{}")
+        requires_review = bool(context.get("requires_independent_review"))
+        next_status = "review_pending" if requires_review else "completed"
         conn.execute(
             """
             UPDATE tasks
-            SET status='completed', next_action=?, lease_expires_at=NULL, updated_at=?
+            SET status=?, next_action=?, lease_expires_at=NULL, updated_at=?
             WHERE id=? AND claimed_by=?
             """,
-            (next_action, ts, task_id, worker),
+            (next_status, next_action, ts, task_id, worker),
         )
+        event_type = "task.review_requested" if requires_review else "task.completed"
         conn.execute(
-            "INSERT INTO events (id, task_id, type, actor, payload_json, created_at) VALUES (?, ?, 'task.completed', ?, ?, ?)",
-            (str(uuid.uuid4()), task_id, worker, json.dumps({"run_id": run_id, "next_action": next_action}), ts),
+            "INSERT INTO events (id, task_id, type, actor, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                str(uuid.uuid4()),
+                task_id,
+                event_type,
+                worker,
+                json.dumps({"run_id": run_id, "next_action": next_action, "requires_independent_review": requires_review}),
+                ts,
+            ),
         )
 
 

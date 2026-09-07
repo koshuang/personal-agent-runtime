@@ -18,6 +18,25 @@ def _json_list(value: str | None) -> list[Any]:
     return parsed if isinstance(parsed, list) else []
 
 
+def _json_obj(value: str | None) -> dict[str, Any]:
+    if not value:
+        return {}
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _accepted_independent_review(task_runs: list[dict[str, Any]]) -> bool:
+    for run in task_runs:
+        metadata = _json_obj(run.get("metadata_json"))
+        review = metadata.get("review")
+        if metadata.get("role") == "critic" and isinstance(review, dict) and review.get("verdict") == "accepted":
+            return True
+    return False
+
+
 def reconcile(*, path: Path = DEFAULT_DB) -> dict[str, Any]:
     now = datetime.now(timezone.utc).isoformat()
     findings: list[dict[str, Any]] = []
@@ -33,6 +52,25 @@ def reconcile(*, path: Path = DEFAULT_DB) -> dict[str, Any]:
     for task in tasks:
         task_runs = runs_by_task.get(task["id"], [])
         latest_run = task_runs[-1] if task_runs else None
+        context = _json_obj(task.get("context_json"))
+        requires_review = bool(context.get("requires_independent_review"))
+
+        if task["status"] == "review_pending":
+            findings.append({
+                "type": "pending_independent_review",
+                "task_id": task["id"],
+                "action": "request_independent_review",
+                "requires_human": False,
+            })
+
+        if task["status"] == "review_rejected":
+            findings.append({
+                "type": "rejected_independent_review",
+                "task_id": task["id"],
+                "action": "inspect_review_and_rework",
+                "automatic_retry": False,
+                "requires_human": True,
+            })
 
         if (
             task["status"] == "claimed"
@@ -55,8 +93,17 @@ def reconcile(*, path: Path = DEFAULT_DB) -> dict[str, Any]:
             })
 
         if task["status"] == "completed":
-            evidence = _json_list(latest_run.get("evidence_json") if latest_run else None)
-            if not latest_run or latest_run.get("status") != "completed" or not evidence:
+            if requires_review and not _accepted_independent_review(task_runs):
+                findings.append({
+                    "type": "independent_review_evidence_gap",
+                    "task_id": task["id"],
+                    "action": "verify_independent_review",
+                })
+
+            worker_runs = [r for r in task_runs if _json_obj(r.get("metadata_json")).get("role") != "critic"]
+            evidence_run = worker_runs[-1] if worker_runs else latest_run
+            evidence = _json_list(evidence_run.get("evidence_json") if evidence_run else None)
+            if not evidence_run or evidence_run.get("status") != "completed" or not evidence:
                 findings.append({
                     "type": "completion_evidence_gap",
                     "task_id": task["id"],

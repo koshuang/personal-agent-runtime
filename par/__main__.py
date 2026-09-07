@@ -7,6 +7,7 @@ from pathlib import Path
 from .db import DEFAULT_DB, claim_task, complete_task, create_task, fail_task, get_task, heartbeat, init_db, next_task
 from .portability import export_state, restore_state
 from .reconcile import reconcile
+from .review import submit_review
 from .scheduler import decide
 
 
@@ -25,6 +26,19 @@ def parser() -> argparse.ArgumentParser:
     scheduler = sub.add_parser("scheduler")
     scheduler_sub = scheduler.add_subparsers(dest="scheduler_command", required=True)
     scheduler_sub.add_parser("decide")
+
+    review = sub.add_parser("review")
+    review_sub = review.add_subparsers(dest="review_command", required=True)
+    submit = review_sub.add_parser("submit")
+    submit.add_argument("task_id")
+    submit.add_argument("--reviewer", required=True)
+    submit.add_argument("--findings", default="[]")
+    submit.add_argument("--severity", default="none")
+    submit.add_argument("--evidence-gap", default="[]")
+    submit.add_argument("--recommended-action", default="")
+    submit.add_argument("--verdict", required=True, choices=["accepted", "rejected"])
+    submit.add_argument("--provider")
+    submit.add_argument("--model")
 
     state = sub.add_parser("state")
     state_sub = state.add_subparsers(dest="state_command", required=True)
@@ -50,6 +64,9 @@ def parser() -> argparse.ArgumentParser:
     claim.add_argument("task_id")
     claim.add_argument("--worker", required=True)
     claim.add_argument("--lease-minutes", type=int, default=30)
+    claim.add_argument("--role", default="worker", choices=["orchestrator", "worker", "critic", "auditor"])
+    claim.add_argument("--provider")
+    claim.add_argument("--model")
 
     beat = task_sub.add_parser("heartbeat")
     beat.add_argument("task_id")
@@ -99,6 +116,23 @@ def main() -> None:
             dump(decide(path=path))
         return
 
+    if args.command == "review":
+        init_db(path)
+        if args.review_command == "submit":
+            dump(submit_review(
+                task_id=args.task_id,
+                reviewer=args.reviewer,
+                findings=json.loads(args.findings),
+                severity=args.severity,
+                evidence_gap=json.loads(args.evidence_gap),
+                recommended_action=args.recommended_action,
+                verdict=args.verdict,
+                provider=args.provider,
+                model=args.model,
+                path=path,
+            ))
+        return
+
     if args.command == "state":
         artifact = Path(args.artifact)
         if args.state_command == "export":
@@ -115,7 +149,7 @@ def main() -> None:
         task = next_task(path=path)
         dump(task or {"task": None})
     elif args.task_command == "claim":
-        dump(claim_task(task_id=args.task_id, worker=args.worker, lease_minutes=args.lease_minutes, path=path))
+        dump(claim_task(task_id=args.task_id, worker=args.worker, lease_minutes=args.lease_minutes, role=args.role, provider=args.provider, model=args.model, path=path))
     elif args.task_command == "heartbeat":
         heartbeat(task_id=args.task_id, worker=args.worker, lease_minutes=args.lease_minutes, path=path)
         dump({"ok": True})
