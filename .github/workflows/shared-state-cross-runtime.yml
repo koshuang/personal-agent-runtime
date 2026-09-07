@@ -1,0 +1,125 @@
+name: Shared State cross-runtime recovery
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/shared-state-cross-runtime.yml"
+      - "par/**"
+      - "tests/**"
+      - "pyproject.toml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  produce-state:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install runtime
+        run: python -m pip install -e .
+      - name: Create completed canonical task and export portable state
+        shell: bash
+        run: |
+          set -euo pipefail
+          DB="$RUNNER_TEMP/producer/runtime.db"
+          mkdir -p "$(dirname "$DB")" evidence
+          python -m par --db "$DB" init >/dev/null
+
+          CREATE_JSON=$(python -m par --db "$DB" task create \
+            --goal "Prove independent automation runtime recovery" \
+            --repo koshuang/personal-agent-runtime \
+            --mode read-only \
+            --context '{"source_issue":"#16","pilot":"github-actions-cross-runtime"}')
+          TASK_ID=$(printf '%s' "$CREATE_JSON" | python -c 'import json,sys; print(json.load(sys.stdin)["id"])')
+
+          CLAIM_JSON=$(python -m par --db "$DB" task claim "$TASK_ID" --worker producer-runner)
+          RUN_ID=$(printf '%s' "$CLAIM_JSON" | python -c 'import json,sys; print(json.load(sys.stdin)["run_id"])')
+
+          python -m par --db "$DB" task complete "$TASK_ID" \
+            --run-id "$RUN_ID" \
+            --worker producer-runner \
+            --summary "Producer runner completed the portability pilot." \
+            --evidence '["github-actions://produce-state"]' \
+            --blockers '[]' \
+            --next-action "Fresh runner must restore the artifact and recover this state without producer workspace." \
+            --metadata '{"cost_usd":0,"credential_access":false}'
+
+          python -m par --db "$DB" task show "$TASK_ID" > evidence/expected.json
+          printf '%s\n' "$TASK_ID" > evidence/task-id.txt
+          python -m par --db "$DB" state export evidence/state.parstate >/dev/null
+
+          test ! -e evidence/runtime.db
+          test ! -e evidence/runtime.db-wal
+          test ! -e evidence/runtime.db-shm
+      - name: Upload portability artifact only
+        uses: actions/upload-artifact@v4
+        with:
+          name: shared-state-portability
+          path: |
+            evidence/state.parstate
+            evidence/task-id.txt
+            evidence/expected.json
+          if-no-files-found: error
+          retention-days: 1
+
+  recover-state:
+    needs: produce-state
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install runtime
+        run: python -m pip install -e .
+      - name: Download portable state from independent runner
+        uses: actions/download-artifact@v5
+        with:
+          name: shared-state-portability
+          path: evidence
+      - name: Restore and prove transcript-free recovery
+        shell: bash
+        run: |
+          set -euo pipefail
+          TASK_ID=$(cat evidence/task-id.txt)
+          DB="$RUNNER_TEMP/fresh-runtime/runtime.db"
+          mkdir -p "$(dirname "$DB")"
+
+          test ! -e "$DB"
+          python -m par --db "$DB" state restore evidence/state.parstate >/dev/null
+          python -m par --db "$DB" task show "$TASK_ID" > evidence/recovered.json
+
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          expected = json.loads(Path("evidence/expected.json").read_text())
+          recovered = json.loads(Path("evidence/recovered.json").read_text())
+
+          assert recovered["id"] == expected["id"]
+          assert recovered["status"] == "completed"
+          assert recovered["next_action"] == expected["next_action"]
+          assert recovered["repo"] == "koshuang/personal-agent-runtime"
+
+          assert [r["id"] for r in recovered["runs"]] == [r["id"] for r in expected["runs"]]
+          assert [e["id"] for e in recovered["events"]] == [e["id"] for e in expected["events"]]
+          assert [a["id"] for a in recovered["artifacts"]] == [a["id"] for a in expected["artifacts"]]
+
+          assert recovered["runs"][-1]["summary"] == "Producer runner completed the portability pilot."
+          assert json.loads(recovered["runs"][-1]["evidence_json"]) == ["github-actions://produce-state"]
+          assert json.loads(recovered["runs"][-1]["blockers_json"]) == []
+          assert json.loads(recovered["runs"][-1]["metadata_json"])["cost_usd"] == 0
+          assert json.loads(recovered["runs"][-1]["metadata_json"])["credential_access"] is False
+          PY
+      - name: Upload recovery evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: shared-state-recovery-evidence
+          path: evidence/recovered.json
+          if-no-files-found: error
+          retention-days: 7
