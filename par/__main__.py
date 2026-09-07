@@ -7,6 +7,7 @@ from pathlib import Path
 from .db import DEFAULT_DB, claim_task, complete_task, create_task, fail_task, get_task, heartbeat, init_db, next_task
 from .portability import export_state, restore_state
 from .reconcile import reconcile
+from .scheduler import decide
 
 
 def dump(value):
@@ -20,6 +21,10 @@ def parser() -> argparse.ArgumentParser:
 
     sub.add_parser("init")
     sub.add_parser("reconcile")
+
+    scheduler = sub.add_parser("scheduler")
+    scheduler_sub = scheduler.add_subparsers(dest="scheduler_command", required=True)
+    scheduler_sub.add_parser("decide")
 
     state = sub.add_parser("state")
     state_sub = state.add_subparsers(dest="state_command", required=True)
@@ -86,6 +91,12 @@ def main() -> None:
     if args.command == "reconcile":
         init_db(path)
         dump(reconcile(path=path))
+        return
+
+    if args.command == "scheduler":
+        init_db(path)
+        if args.scheduler_command == "decide":
+            dump(decide(path=path))
         return
 
     if args.command == "state":
