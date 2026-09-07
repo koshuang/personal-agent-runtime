@@ -58,8 +58,9 @@ def test_dispatch_pending_cli_materializes_safe_event_once(tmp_path: Path) -> No
     second = _cli(db, "dispatch", "pending", "--limit", "10")
 
     assert first["materialized"] == 1
+    assert second["scanned"] == 0
     assert second["materialized"] == 0
-    assert second["already_materialized"] == 1
+    assert second["already_materialized"] == 0
     assert _task_count(db) == 1
 
 
@@ -92,7 +93,13 @@ def test_dispatch_pending_cli_respects_limit(tmp_path: Path) -> None:
             ),
         )
 
-    result = _cli(db, "dispatch", "pending", "--limit", "1")
-    assert result["scanned"] == 1
-    assert result["materialized"] == 1
-    assert _task_count(db) == 1
+    first = _cli(db, "dispatch", "pending", "--limit", "1")
+    second = _cli(db, "dispatch", "pending", "--limit", "1")
+    third = _cli(db, "dispatch", "pending", "--limit", "1")
+
+    assert first["scanned"] == 1
+    assert first["materialized"] == 1
+    assert second["scanned"] == 1
+    assert second["materialized"] == 1
+    assert third["scanned"] == 0
+    assert _task_count(db) == 2
