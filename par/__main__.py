@@ -4,6 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
+from .checkpoint import checkpoint_run, latest_checkpoint
 from .db import DEFAULT_DB, claim_task, complete_task, create_task, fail_task, get_task, heartbeat, init_db, next_task, retry_task
 from .portability import export_state, restore_state
 from .reconcile import reconcile
@@ -78,6 +79,15 @@ def parser() -> argparse.ArgumentParser:
     retry = task_sub.add_parser("retry")
     retry.add_argument("task_id")
     retry.add_argument("--actor", default="human")
+
+    checkpoint = task_sub.add_parser("checkpoint")
+    checkpoint.add_argument("task_id")
+    checkpoint.add_argument("--run-id", required=True)
+    checkpoint.add_argument("--worker", required=True)
+    checkpoint.add_argument("--context", required=True, help="JSON object without credentials/secrets")
+
+    resume = task_sub.add_parser("resume-context")
+    resume.add_argument("task_id")
 
     complete = task_sub.add_parser("complete")
     complete.add_argument("task_id")
@@ -170,6 +180,13 @@ def main() -> None:
         dump({"ok": True})
     elif args.task_command == "retry":
         dump(retry_task(task_id=args.task_id, actor=args.actor, path=path))
+    elif args.task_command == "checkpoint":
+        context = json.loads(args.context)
+        if not isinstance(context, dict):
+            raise TypeError("checkpoint context must be a JSON object")
+        dump(checkpoint_run(task_id=args.task_id, run_id=args.run_id, worker=args.worker, context=context, path=path))
+    elif args.task_command == "resume-context":
+        dump(latest_checkpoint(task_id=args.task_id, path=path) or {"checkpoint": None})
     elif args.task_command == "complete":
         complete_task(task_id=args.task_id, run_id=args.run_id, worker=args.worker, summary=args.summary, evidence=json.loads(args.evidence), blockers=json.loads(args.blockers), next_action=args.next_action, metadata=json.loads(args.metadata), path=path)
         dump({"ok": True})
