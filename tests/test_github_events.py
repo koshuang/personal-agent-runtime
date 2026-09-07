@@ -91,8 +91,11 @@ def test_conflicting_delivery_replay_fails_closed(tmp_path: Path) -> None:
         ({"event_name": "issues"}, "unsupported GitHub event"),
         ({"delivery_id": ""}, "delivery_id"),
         ({"repository": "invalid"}, "owner/name"),
+        ({"repository": "owner /repo"}, "whitespace"),
+        ({"repository": "owner/ repo"}, "whitespace"),
         ({"pull_request_number": 0}, "positive integer"),
         ({"payload": []}, "payload must be a JSON object"),
+        ({"payload": None}, "payload must be a JSON object"),
         ({"payload": {"action": ""}}, "payload.action"),
     ],
 )
