@@ -9,6 +9,7 @@ from typing import Any
 
 DEFAULT_DB = Path(".par/runtime.db")
 ROLE_VALUES = {"orchestrator", "worker", "critic", "auditor"}
+DEFAULT_MAX_ATTEMPTS = 3
 
 SCHEMA = """
 PRAGMA journal_mode=WAL;
@@ -26,6 +27,8 @@ CREATE TABLE IF NOT EXISTS tasks (
   claimed_by TEXT,
   lease_expires_at TEXT,
   next_action TEXT,
+  attempt_count INTEGER NOT NULL DEFAULT 0,
+  max_attempts INTEGER NOT NULL DEFAULT 3,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -83,6 +86,10 @@ def _migrate(conn: sqlite3.Connection) -> None:
     columns = {row[1] for row in conn.execute("PRAGMA table_info(tasks)")}
     if "idempotency_key" not in columns:
         conn.execute("ALTER TABLE tasks ADD COLUMN idempotency_key TEXT")
+    if "attempt_count" not in columns:
+        conn.execute("ALTER TABLE tasks ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0")
+    if "max_attempts" not in columns:
+        conn.execute(f"ALTER TABLE tasks ADD COLUMN max_attempts INTEGER NOT NULL DEFAULT {DEFAULT_MAX_ATTEMPTS}")
     conn.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_idempotency_key ON tasks(idempotency_key) WHERE idempotency_key IS NOT NULL"
     )
@@ -102,10 +109,13 @@ def create_task(
     context: dict[str, Any] | None = None,
     priority: int = 100,
     idempotency_key: str | None = None,
+    max_attempts: int = DEFAULT_MAX_ATTEMPTS,
     path: Path = DEFAULT_DB,
 ) -> dict[str, Any]:
     if idempotency_key is not None and not idempotency_key.strip():
         raise ValueError("idempotency_key must be non-empty when provided")
+    if max_attempts < 1:
+        raise ValueError("max_attempts must be at least 1")
     task_id = str(uuid.uuid4())
     ts = now_iso()
     payload = json.dumps(context or {}, ensure_ascii=False)
@@ -114,10 +124,10 @@ def create_task(
             cur = conn.execute(
                 """
                 INSERT OR IGNORE INTO tasks
-                (id, goal, idempotency_key, status, repo, mode, context_json, priority, created_at, updated_at)
-                VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?)
+                (id, goal, idempotency_key, status, repo, mode, context_json, priority, attempt_count, max_attempts, created_at, updated_at)
+                VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, 0, ?, ?, ?)
                 """,
-                (task_id, goal, idempotency_key, repo, mode, payload, priority, ts, ts),
+                (task_id, goal, idempotency_key, repo, mode, payload, priority, max_attempts, ts, ts),
             )
             if cur.rowcount == 0:
                 row = conn.execute("SELECT * FROM tasks WHERE idempotency_key=?", (idempotency_key,)).fetchone()
@@ -128,10 +138,10 @@ def create_task(
             conn.execute(
                 """
                 INSERT INTO tasks
-                (id, goal, idempotency_key, status, repo, mode, context_json, priority, created_at, updated_at)
-                VALUES (?, ?, NULL, 'pending', ?, ?, ?, ?, ?, ?)
+                (id, goal, idempotency_key, status, repo, mode, context_json, priority, attempt_count, max_attempts, created_at, updated_at)
+                VALUES (?, ?, NULL, 'pending', ?, ?, ?, ?, 0, ?, ?, ?)
                 """,
-                (task_id, goal, repo, mode, payload, priority, ts, ts),
+                (task_id, goal, repo, mode, payload, priority, max_attempts, ts, ts),
             )
         conn.execute(
             "INSERT INTO events (id, task_id, type, actor, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?)",
@@ -178,8 +188,8 @@ def claim_task(
         cur = conn.execute(
             """
             UPDATE tasks
-            SET status='claimed', claimed_by=?, lease_expires_at=?, updated_at=?
-            WHERE id=? AND (
+            SET status='claimed', claimed_by=?, lease_expires_at=?, attempt_count=attempt_count+1, updated_at=?
+            WHERE id=? AND attempt_count < max_attempts AND (
                 status='pending' OR
                 (status='claimed' AND lease_expires_at IS NOT NULL AND lease_expires_at < ?)
             )
@@ -187,7 +197,7 @@ def claim_task(
             (worker, expires, ts, task_id, ts),
         )
         if cur.rowcount != 1:
-            raise RuntimeError("task is not claimable")
+            raise RuntimeError("task is not claimable or retry budget is exhausted")
         conn.execute(
             "INSERT INTO runs (id, task_id, worker, status, metadata_json, started_at) VALUES (?, ?, ?, 'running', ?, ?)",
             (run_id, task_id, worker, run_metadata, ts),
@@ -218,6 +228,37 @@ def heartbeat(*, task_id: str, worker: str, lease_minutes: int = 30, path: Path 
         )
         if cur.rowcount != 1:
             raise RuntimeError("task is not owned by this worker")
+
+
+def retry_task(*, task_id: str, actor: str = "human", path: Path = DEFAULT_DB) -> dict[str, Any]:
+    ts = now_iso()
+    with connect(path) as conn:
+        task = conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+        if not task:
+            raise KeyError(task_id)
+        if task["status"] != "failed":
+            raise RuntimeError("only failed tasks can be retried")
+
+        exhausted = task["attempt_count"] >= task["max_attempts"]
+        next_status = "dead_letter" if exhausted else "pending"
+        conn.execute(
+            "UPDATE tasks SET status=?, claimed_by=NULL, lease_expires_at=NULL, updated_at=? WHERE id=?",
+            (next_status, ts, task_id),
+        )
+        event_type = "task.dead_lettered" if exhausted else "task.retry_queued"
+        conn.execute(
+            "INSERT INTO events (id, task_id, type, actor, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                str(uuid.uuid4()),
+                task_id,
+                event_type,
+                actor,
+                json.dumps({"attempt_count": task["attempt_count"], "max_attempts": task["max_attempts"]}),
+                ts,
+            ),
+        )
+        row = conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+    return dict(row)
 
 
 def complete_task(

@@ -72,6 +72,17 @@ def reconcile(*, path: Path = DEFAULT_DB) -> dict[str, Any]:
                 "requires_human": True,
             })
 
+        if task["status"] == "dead_letter":
+            findings.append({
+                "type": "dead_letter",
+                "task_id": task["id"],
+                "action": "inspect_terminal_failure",
+                "attempt_count": task.get("attempt_count", 0),
+                "max_attempts": task.get("max_attempts", 0),
+                "automatic_retry": False,
+                "requires_human": True,
+            })
+
         if (
             task["status"] == "claimed"
             and task.get("lease_expires_at")
@@ -84,12 +95,19 @@ def reconcile(*, path: Path = DEFAULT_DB) -> dict[str, Any]:
                 "recoverable": True,
             })
 
-        if task["status"] == "failed" or (latest_run and latest_run["status"] == "failed"):
+        if task["status"] == "failed" or (latest_run and latest_run["status"] == "failed" and task["status"] != "dead_letter"):
+            attempt_count = int(task.get("attempt_count", 0))
+            max_attempts = int(task.get("max_attempts", 0))
+            retryable = attempt_count < max_attempts
             findings.append({
-                "type": "failed_work",
+                "type": "failed_work" if retryable else "retry_budget_exhausted",
                 "task_id": task["id"],
-                "action": "classify_retry",
+                "action": "classify_retry" if retryable else "dead_letter",
+                "attempt_count": attempt_count,
+                "max_attempts": max_attempts,
+                "retryable": retryable,
                 "automatic_retry": False,
+                "requires_human": True,
             })
 
         if task["status"] == "completed":

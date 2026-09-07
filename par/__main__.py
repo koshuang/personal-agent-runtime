@@ -4,7 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
-from .db import DEFAULT_DB, claim_task, complete_task, create_task, fail_task, get_task, heartbeat, init_db, next_task
+from .db import DEFAULT_DB, claim_task, complete_task, create_task, fail_task, get_task, heartbeat, init_db, next_task, retry_task
 from .portability import export_state, restore_state
 from .reconcile import reconcile
 from .review import submit_review
@@ -57,6 +57,7 @@ def parser() -> argparse.ArgumentParser:
     create.add_argument("--priority", type=int, default=100)
     create.add_argument("--context", default="{}", help="JSON object")
     create.add_argument("--idempotency-key")
+    create.add_argument("--max-attempts", type=int, default=3)
 
     nxt = task_sub.add_parser("next")
     nxt.add_argument("--worker", required=True)
@@ -73,6 +74,10 @@ def parser() -> argparse.ArgumentParser:
     beat.add_argument("task_id")
     beat.add_argument("--worker", required=True)
     beat.add_argument("--lease-minutes", type=int, default=30)
+
+    retry = task_sub.add_parser("retry")
+    retry.add_argument("task_id")
+    retry.add_argument("--actor", default="human")
 
     complete = task_sub.add_parser("complete")
     complete.add_argument("task_id")
@@ -151,6 +156,7 @@ def main() -> None:
             priority=args.priority,
             context=json.loads(args.context),
             idempotency_key=args.idempotency_key,
+            max_attempts=args.max_attempts,
             path=path,
         ))
     elif args.task_command == "next":
@@ -162,6 +168,8 @@ def main() -> None:
     elif args.task_command == "heartbeat":
         heartbeat(task_id=args.task_id, worker=args.worker, lease_minutes=args.lease_minutes, path=path)
         dump({"ok": True})
+    elif args.task_command == "retry":
+        dump(retry_task(task_id=args.task_id, actor=args.actor, path=path))
     elif args.task_command == "complete":
         complete_task(task_id=args.task_id, run_id=args.run_id, worker=args.worker, summary=args.summary, evidence=json.loads(args.evidence), blockers=json.loads(args.blockers), next_action=args.next_action, metadata=json.loads(args.metadata), path=path)
         dump({"ok": True})
