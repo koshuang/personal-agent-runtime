@@ -8,7 +8,7 @@ A worker should be able to wake up with no previous chat transcript, determine t
 
 ## Phase 1 — Durable Shared State
 
-Status: **active**
+Status: **complete**
 
 ### Definition of Done
 
@@ -16,19 +16,19 @@ Status: **active**
 - [x] Workers can discover and exclusively claim a task with a lease.
 - [x] Workers can heartbeat, complete, fail, and persist `next_action`.
 - [x] Phase 1 read-only policy exists.
-- [ ] The AVTime read-only pilot is executed end-to-end with objective evidence.
-- [x] A fresh session successfully reconstructs task state without prior transcript. Evidence: PR #28/#29 run `produce-state` and `recover-state` on independent GitHub Actions runners using only the portable `.parstate` artifact + task id; the real read-only repo inspection evidence is independently recomputed after restore.
+- [x] The AVTime read-only pilot is executed end-to-end with objective evidence. Evidence: Issue #1 + PR #31; the same `imhere-tw/avtime-backend` task was restored by a fresh independent runner from portable Shared State with zero target/production writes and zero paid API cost.
+- [x] A fresh session successfully reconstructs task state without prior transcript. Evidence: PR #28/#29 and the AVTime-target rerun in PR #31.
 - [x] Reconciliation can identify stale leases, retryable/failed work, missing completion evidence, and unmaterialized `next_action`. Evidence: `par/reconcile.py`, regression tests, and the Phase 1 pilot observation that surfaced `unmaterialized_next_action` rather than silently declaring DONE.
-- [ ] Runtime exposes enough state for an autonomous scheduler to decide whether to resume, retry, verify, or create one next task.
-- [x] Core lifecycle tests pass in CI. Evidence: current-head Python/Go CI and the dedicated Shared State cross-runtime workflow are green through PR #29.
+- [x] Runtime exposes enough state for an autonomous scheduler to decide whether to resume, retry, verify, materialize a next task, execute queued work, or remain idle. Evidence: Issue #32 + PR #33 `par scheduler decide` deterministic read-only contract.
+- [x] Core lifecycle tests pass in CI. Evidence: current-head Python/Go CI plus dedicated Shared State cross-runtime and AVTime target portability workflows.
 
 ### Exit evidence
 
-A real read-only repository task has now survived a full automation-runtime boundary via the portable Shared State contract (PR #29). The remaining Phase 1 exit item is the target-specific AVTime pilot closure in Issue #1; do not substitute the generic portability proof for that target-specific acceptance criterion.
+Phase 1 exit evidence is complete. A real read-only repository task survived a full automation-runtime boundary through the portable Shared State contract, and the target-specific AVTime pilot was rerun successfully with the same-task recovery requirement. The runtime also exposes a deterministic read-only scheduler decision projection, so a fresh orchestrator can inspect durable state without reconstructing policy from chat history.
 
 ## Phase 2 — Reliable Continuous Worker
 
-Do not start until Phase 1 exit evidence exists.
+Status: **active**
 
 Target capabilities:
 
@@ -39,6 +39,8 @@ Target capabilities:
 - worker capability declarations;
 - minimal execution metrics and cost/quota metadata;
 - scheduled worker can repeatedly advance state without creating noise or duplicate work.
+
+Current design track: Issue #3 adds independent worker/reviewer role separation and blind-spot review. Keep Phase 2 work evidence-driven and do not weaken existing zero-cost, credential, or side-effect boundaries.
 
 ## Phase 3 — Unified Active + Passive Control
 
@@ -73,4 +75,4 @@ Only after the runtime is reliable:
 - production automation
 - broad company credential access
 
-These are not missing features during Phase 1; they are intentionally deferred.
+These are not missing features during the current phase; they are intentionally deferred.
