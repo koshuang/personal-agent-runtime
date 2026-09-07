@@ -7,6 +7,7 @@ from pathlib import Path
 from .capabilities import claim_task_if_eligible, declare_worker_capabilities, get_worker_capabilities
 from .checkpoint import resume_context, write_checkpoint
 from .db import DEFAULT_DB, complete_task, create_task, fail_task, get_task, heartbeat, init_db, next_task, retry_task
+from .ingress import get_event, ingest_event, list_events
 from .metrics import metrics_summary, record_run_telemetry, validate_telemetry
 from .portability import export_state, restore_state
 from .reconcile import reconcile
@@ -25,6 +26,13 @@ def _telemetry_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--telemetry-source")
 
 
+def _json_object(value: str, *, name: str) -> dict:
+    parsed = json.loads(value)
+    if not isinstance(parsed, dict):
+        raise ValueError(f"{name} must be a JSON object")
+    return parsed
+
+
 def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="par")
     p.add_argument("--db", default=str(DEFAULT_DB))
@@ -41,6 +49,20 @@ def parser() -> argparse.ArgumentParser:
     scheduler_sub = scheduler.add_subparsers(dest="scheduler_command", required=True)
     scheduler_decide = scheduler_sub.add_parser("decide")
     scheduler_decide.add_argument("--worker")
+
+    event = sub.add_parser("event")
+    event_sub = event.add_subparsers(dest="event_command", required=True)
+    event_ingest = event_sub.add_parser("ingest")
+    event_ingest.add_argument("--idempotency-key", required=True)
+    event_ingest.add_argument("--source", required=True, choices=["schedule", "human", "api", "webhook"])
+    event_ingest.add_argument("--kind", required=True)
+    event_ingest.add_argument("--payload", default="{}")
+    event_ingest.add_argument("--requested-action", default="{}")
+    event_ingest.add_argument("--authority", default="{}")
+    event_show = event_sub.add_parser("show")
+    event_show.add_argument("event_id")
+    event_list = event_sub.add_parser("list")
+    event_list.add_argument("--limit", type=int, default=100)
 
     worker_cmd = sub.add_parser("worker")
     worker_sub = worker_cmd.add_subparsers(dest="worker_command", required=True)
@@ -167,6 +189,24 @@ def main() -> None:
         init_db(path)
         if args.scheduler_command == "decide":
             dump(decide(worker=args.worker, path=path))
+        return
+
+    if args.command == "event":
+        init_db(path)
+        if args.event_command == "ingest":
+            dump(ingest_event(
+                idempotency_key=args.idempotency_key,
+                source=args.source,
+                kind=args.kind,
+                payload=_json_object(args.payload, name="payload"),
+                requested_action=_json_object(args.requested_action, name="requested_action"),
+                authority=_json_object(args.authority, name="authority"),
+                path=path,
+            ))
+        elif args.event_command == "show":
+            dump(get_event(args.event_id, path=path) or {"event": None})
+        elif args.event_command == "list":
+            dump({"events": list_events(limit=args.limit, path=path)})
         return
 
     if args.command == "worker":
