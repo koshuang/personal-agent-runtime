@@ -12,7 +12,10 @@ from par.portability import export_state, restore_state
 
 def _counts(db: Path) -> tuple[int, int]:
     with connect(db) as conn:
-        ingress = conn.execute("SELECT COUNT(*) FROM ingress_events").fetchone()[0]
+        has_ingress = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='ingress_events'"
+        ).fetchone()
+        ingress = conn.execute("SELECT COUNT(*) FROM ingress_events").fetchone()[0] if has_ingress else 0
         tasks = conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
     return ingress, tasks
 
