@@ -77,18 +77,6 @@ def write_checkpoint(
     )
 
     checkpoint_id = str(uuid.uuid4())
-    ts = now_iso()
-    payload = {
-        "checkpoint_id": checkpoint_id,
-        "run_id": run_id,
-        "summary": summary,
-        "completed_steps": completed_steps or [],
-        "remaining_steps": remaining_steps or [],
-        "evidence": evidence or [],
-        "blockers": blockers or [],
-        "resume_hint": resume_hint,
-        "metadata": metadata or {},
-    }
 
     with connect(path) as conn:
         _ensure_schema(conn)
@@ -96,6 +84,20 @@ def write_checkpoint(
         # ownership/lease/run validation and checkpoint persistence one atomic
         # state transition relative to completion, expiry/reclaim, or reassignment.
         conn.execute("BEGIN IMMEDIATE")
+        # Capture time only after the lock is held: waiting for another writer may
+        # outlive the lease, so a pre-lock timestamp could accept stale ownership.
+        ts = now_iso()
+        payload = {
+            "checkpoint_id": checkpoint_id,
+            "run_id": run_id,
+            "summary": summary,
+            "completed_steps": completed_steps or [],
+            "remaining_steps": remaining_steps or [],
+            "evidence": evidence or [],
+            "blockers": blockers or [],
+            "resume_hint": resume_hint,
+            "metadata": metadata or {},
+        }
         task = conn.execute(
             """
             SELECT * FROM tasks
