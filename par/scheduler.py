@@ -13,8 +13,11 @@ _DECISION_PRIORITY = {
     "failed_work": 1,
     "retry_budget_exhausted": 1,
     "dead_letter": 1,
-    "completion_evidence_gap": 2,
-    "unmaterialized_next_action": 3,
+    "rejected_independent_review": 2,
+    "pending_independent_review": 2,
+    "independent_review_evidence_gap": 2,
+    "completion_evidence_gap": 3,
+    "unmaterialized_next_action": 4,
 }
 
 
@@ -39,7 +42,7 @@ def _decision_from_finding(finding: dict[str, Any], *, path: Path) -> dict[str, 
             "decision": "retry",
             "task_id": task_id,
             "run_id": finding.get("run_id"),
-            "reason": "Failed work is within its retry budget but Phase 2 does not retry automatically.",
+            "reason": "Failed work is within its retry budget but automatic retry is not authorized by this projection.",
             "finding_type": finding_type,
             "attempt_count": finding.get("attempt_count"),
             "max_attempts": finding.get("max_attempts"),
@@ -57,6 +60,39 @@ def _decision_from_finding(finding: dict[str, Any], *, path: Path) -> dict[str, 
             "attempt_count": finding.get("attempt_count"),
             "max_attempts": finding.get("max_attempts"),
             "requires_human": True,
+            "safe_to_auto_execute": False,
+        }
+
+    if finding_type == "pending_independent_review":
+        return {
+            "decision": "review",
+            "task_id": task_id,
+            "run_id": finding.get("run_id"),
+            "reason": "Durable state requires an independent review before closure.",
+            "finding_type": finding_type,
+            "requires_human": False,
+            "safe_to_auto_execute": False,
+        }
+
+    if finding_type == "rejected_independent_review":
+        return {
+            "decision": "rework",
+            "task_id": task_id,
+            "run_id": finding.get("run_id"),
+            "reason": "Independent review rejected the work; the durable next step is inspection and rework, not idle.",
+            "finding_type": finding_type,
+            "requires_human": True,
+            "safe_to_auto_execute": False,
+        }
+
+    if finding_type == "independent_review_evidence_gap":
+        return {
+            "decision": "verify_review",
+            "task_id": task_id,
+            "run_id": finding.get("run_id"),
+            "reason": "Task closure lacks accepted independent review evidence.",
+            "finding_type": finding_type,
+            "requires_human": False,
             "safe_to_auto_execute": False,
         }
 
@@ -86,10 +122,19 @@ def _decision_from_finding(finding: dict[str, Any], *, path: Path) -> dict[str, 
     raise ValueError(f"unsupported scheduler finding type: {finding_type}")
 
 
-def decide(*, worker: str | None = None, path: Path = DEFAULT_DB) -> dict[str, Any]:
-    """Project durable Runtime state into one deterministic, read-only scheduler decision."""
+def decide(
+    *,
+    worker: str | None = None,
+    path: Path = DEFAULT_DB,
+    reconciliation: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Project durable Runtime state into one deterministic, read-only scheduler decision.
 
-    reconciliation = reconcile(path=path)
+    Callers that already obtained reconciliation may pass it so one command
+    response cannot mix two different reconciliation reads.
+    """
+
+    reconciliation = reconciliation if reconciliation is not None else reconcile(path=path)
     actionable = [
         finding
         for finding in reconciliation["findings"]
