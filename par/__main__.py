@@ -56,6 +56,7 @@ def parser() -> argparse.ArgumentParser:
     create.add_argument("--mode", default="read-only")
     create.add_argument("--priority", type=int, default=100)
     create.add_argument("--context", default="{}", help="JSON object")
+    create.add_argument("--idempotency-key")
 
     nxt = task_sub.add_parser("next")
     nxt.add_argument("--worker", required=True)
@@ -143,7 +144,15 @@ def main() -> None:
 
     if args.task_command == "create":
         init_db(path)
-        dump(create_task(goal=args.goal, repo=args.repo, mode=args.mode, priority=args.priority, context=json.loads(args.context), path=path))
+        dump(create_task(
+            goal=args.goal,
+            repo=args.repo,
+            mode=args.mode,
+            priority=args.priority,
+            context=json.loads(args.context),
+            idempotency_key=args.idempotency_key,
+            path=path,
+        ))
     elif args.task_command == "next":
         init_db(path)
         task = next_task(path=path)

@@ -17,6 +17,7 @@ PRAGMA foreign_keys=ON;
 CREATE TABLE IF NOT EXISTS tasks (
   id TEXT PRIMARY KEY,
   goal TEXT NOT NULL,
+  idempotency_key TEXT,
   status TEXT NOT NULL DEFAULT 'pending',
   repo TEXT,
   mode TEXT NOT NULL DEFAULT 'read-only',
@@ -78,9 +79,19 @@ def connect(path: Path = DEFAULT_DB) -> sqlite3.Connection:
     return conn
 
 
+def _migrate(conn: sqlite3.Connection) -> None:
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(tasks)")}
+    if "idempotency_key" not in columns:
+        conn.execute("ALTER TABLE tasks ADD COLUMN idempotency_key TEXT")
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_idempotency_key ON tasks(idempotency_key) WHERE idempotency_key IS NOT NULL"
+    )
+
+
 def init_db(path: Path = DEFAULT_DB) -> None:
     with connect(path) as conn:
         conn.executescript(SCHEMA)
+        _migrate(conn)
 
 
 def create_task(
@@ -90,20 +101,38 @@ def create_task(
     mode: str = "read-only",
     context: dict[str, Any] | None = None,
     priority: int = 100,
+    idempotency_key: str | None = None,
     path: Path = DEFAULT_DB,
 ) -> dict[str, Any]:
+    if idempotency_key is not None and not idempotency_key.strip():
+        raise ValueError("idempotency_key must be non-empty when provided")
     task_id = str(uuid.uuid4())
     ts = now_iso()
     payload = json.dumps(context or {}, ensure_ascii=False)
     with connect(path) as conn:
-        conn.execute(
-            """
-            INSERT INTO tasks
-            (id, goal, status, repo, mode, context_json, priority, created_at, updated_at)
-            VALUES (?, ?, 'pending', ?, ?, ?, ?, ?, ?)
-            """,
-            (task_id, goal, repo, mode, payload, priority, ts, ts),
-        )
+        if idempotency_key is not None:
+            cur = conn.execute(
+                """
+                INSERT OR IGNORE INTO tasks
+                (id, goal, idempotency_key, status, repo, mode, context_json, priority, created_at, updated_at)
+                VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?)
+                """,
+                (task_id, goal, idempotency_key, repo, mode, payload, priority, ts, ts),
+            )
+            if cur.rowcount == 0:
+                row = conn.execute("SELECT * FROM tasks WHERE idempotency_key=?", (idempotency_key,)).fetchone()
+                if not row:
+                    raise RuntimeError("idempotent task insert was ignored without an existing task")
+                return dict(row)
+        else:
+            conn.execute(
+                """
+                INSERT INTO tasks
+                (id, goal, idempotency_key, status, repo, mode, context_json, priority, created_at, updated_at)
+                VALUES (?, ?, NULL, 'pending', ?, ?, ?, ?, ?, ?)
+                """,
+                (task_id, goal, repo, mode, payload, priority, ts, ts),
+            )
         conn.execute(
             "INSERT INTO events (id, task_id, type, actor, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?)",
             (str(uuid.uuid4()), task_id, "task.created", "human", payload, ts),
