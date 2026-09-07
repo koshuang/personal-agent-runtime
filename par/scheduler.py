@@ -109,6 +109,16 @@ def decide(*, worker: str | None = None, path: Path = DEFAULT_DB) -> dict[str, A
     if task:
         read_only = task.get("mode") == "read-only"
         eligibility = evaluate_worker_eligibility(task=task, worker=worker, path=path)
+        if not eligibility["required_capabilities"]:
+            return {
+                "decision": "execute",
+                "task_id": task["id"],
+                "run_id": None,
+                "reason": "Eligible queued task is available and no higher-priority reconciliation finding exists.",
+                "finding_type": None,
+                "requires_human": not read_only,
+                "safe_to_auto_execute": read_only,
+            }
         if not eligibility["eligible"]:
             return {
                 "decision": "await_capable_worker",
@@ -139,7 +149,6 @@ def decide(*, worker: str | None = None, path: Path = DEFAULT_DB) -> dict[str, A
         "run_id": None,
         "reason": "No reconciliation finding or eligible queued task requires action.",
         "finding_type": None,
-        "worker": worker,
         "requires_human": False,
         "safe_to_auto_execute": False,
     }
