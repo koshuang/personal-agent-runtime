@@ -1,0 +1,205 @@
+name: Phase 2 repeated scheduled advancement
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/phase2-repeated-advancement.yml"
+      - "par/**"
+      - "tests/**"
+      - "pyproject.toml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  seed:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e .
+      - name: Seed one completed read-only task with persisted next_action
+        shell: bash
+        run: |
+          set -euo pipefail
+          DB="$RUNNER_TEMP/seed/runtime.db"
+          mkdir -p "$(dirname "$DB")" evidence
+          python -m par --db "$DB" init >/dev/null
+          CREATE=$(python -m par --db "$DB" task create --goal "scheduled-step-1" --mode read-only --idempotency-key phase2-scheduled-root)
+          TASK=$(printf '%s' "$CREATE" | python -c 'import json,sys; print(json.load(sys.stdin)["id"])')
+          CLAIM=$(python -m par --db "$DB" task claim "$TASK" --worker seed-worker)
+          RUN=$(printf '%s' "$CLAIM" | python -c 'import json,sys; print(json.load(sys.stdin)["run_id"])')
+          python -m par --db "$DB" task complete "$TASK" --run-id "$RUN" --worker seed-worker \
+            --summary "seed completed" --evidence '["phase2:seed"]' --next-action "scheduled-step-2" \
+            --cost-usd 0 --quota-units 0 --telemetry-source ci-fixture >/dev/null
+          python -m par --db "$DB" state export evidence/state.parstate >/dev/null
+      - uses: actions/upload-artifact@v4
+        with:
+          name: phase2-state-0
+          path: evidence/state.parstate
+          if-no-files-found: error
+          retention-days: 1
+
+  round-1-materialize:
+    needs: seed
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e .
+      - uses: actions/download-artifact@v5
+        with:
+          name: phase2-state-0
+          path: evidence
+      - name: Fresh runtime materializes exactly one successor
+        shell: bash
+        run: |
+          set -euo pipefail
+          DB="$RUNNER_TEMP/round1/runtime.db"
+          mkdir -p "$(dirname "$DB")"
+          python -m par --db "$DB" state restore evidence/state.parstate >/dev/null
+          DB="$DB" python - <<'PY'
+          import json, os
+          from pathlib import Path
+          from par.advancement import advance_once, state_counts
+          db = Path(os.environ["DB"])
+          before = state_counts(path=db)
+          first = advance_once(worker="scheduled-run-1", path=db)
+          assert first["changed"] is True
+          assert first["action"] == "materialized_next"
+          assert first["counts_after"]["tasks"] == before["tasks"] + 1
+          stable = state_counts(path=db)
+          second = advance_once(worker="scheduled-run-1-repeat", path=db)
+          assert second["changed"] is False
+          assert state_counts(path=db) == stable
+          print(json.dumps({"first": first, "repeat": second}, indent=2))
+          PY
+          python -m par --db "$DB" state export evidence/state-1.parstate >/dev/null
+      - uses: actions/upload-artifact@v4
+        with:
+          name: phase2-state-1
+          path: evidence/state-1.parstate
+          if-no-files-found: error
+          retention-days: 1
+
+  round-2-complete-successor:
+    needs: round-1-materialize
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e .
+      - uses: actions/download-artifact@v5
+        with:
+          name: phase2-state-1
+          path: evidence
+      - name: Fresh runtime advances successor work and persists another next_action
+        shell: bash
+        run: |
+          set -euo pipefail
+          DB="$RUNNER_TEMP/round2/runtime.db"
+          mkdir -p "$(dirname "$DB")"
+          python -m par --db "$DB" state restore evidence/state-1.parstate >/dev/null
+          NEXT=$(python -m par --db "$DB" task next --worker scheduled-run-2)
+          TASK=$(printf '%s' "$NEXT" | python -c 'import json,sys; print(json.load(sys.stdin)["id"])')
+          CLAIM=$(python -m par --db "$DB" task claim "$TASK" --worker scheduled-run-2)
+          RUN=$(printf '%s' "$CLAIM" | python -c 'import json,sys; print(json.load(sys.stdin)["run_id"])')
+          python -m par --db "$DB" task complete "$TASK" --run-id "$RUN" --worker scheduled-run-2 \
+            --summary "scheduled step 2 completed" --evidence '["phase2:round2"]' --next-action "scheduled-step-3" \
+            --cost-usd 0 --quota-units 0 --telemetry-source ci-fixture >/dev/null
+          python -m par --db "$DB" state export evidence/state-2.parstate >/dev/null
+      - uses: actions/upload-artifact@v4
+        with:
+          name: phase2-state-2
+          path: evidence/state-2.parstate
+          if-no-files-found: error
+          retention-days: 1
+
+  round-3-materialize-final:
+    needs: round-2-complete-successor
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e .
+      - uses: actions/download-artifact@v5
+        with:
+          name: phase2-state-2
+          path: evidence
+      - name: Fresh runtime materializes the final successor without reviving prior next_action
+        shell: bash
+        run: |
+          set -euo pipefail
+          DB="$RUNNER_TEMP/round3/runtime.db"
+          mkdir -p "$(dirname "$DB")"
+          python -m par --db "$DB" state restore evidence/state-2.parstate >/dev/null
+          DB="$DB" python - <<'PY'
+          import os
+          from pathlib import Path
+          from par.advancement import advance_once, state_counts
+          db = Path(os.environ["DB"])
+          before = state_counts(path=db)
+          result = advance_once(worker="scheduled-run-3", path=db)
+          assert result["changed"] is True
+          assert result["action"] == "materialized_next"
+          assert result["counts_after"]["tasks"] == before["tasks"] + 1
+          PY
+          python -m par --db "$DB" state export evidence/state-3.parstate >/dev/null
+      - uses: actions/upload-artifact@v4
+        with:
+          name: phase2-state-3
+          path: evidence/state-3.parstate
+          if-no-files-found: error
+          retention-days: 1
+
+  round-4-terminal-idle:
+    needs: round-3-materialize-final
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e .
+      - uses: actions/download-artifact@v5
+        with:
+          name: phase2-state-3
+          path: evidence
+      - name: Fresh runtime completes final task and proves repeated wake-up is noiseless idle
+        shell: bash
+        run: |
+          set -euo pipefail
+          DB="$RUNNER_TEMP/round4/runtime.db"
+          mkdir -p "$(dirname "$DB")"
+          python -m par --db "$DB" state restore evidence/state-3.parstate >/dev/null
+          NEXT=$(python -m par --db "$DB" task next --worker scheduled-run-4)
+          TASK=$(printf '%s' "$NEXT" | python -c 'import json,sys; print(json.load(sys.stdin)["id"])')
+          CLAIM=$(python -m par --db "$DB" task claim "$TASK" --worker scheduled-run-4)
+          RUN=$(printf '%s' "$CLAIM" | python -c 'import json,sys; print(json.load(sys.stdin)["run_id"])')
+          python -m par --db "$DB" task complete "$TASK" --run-id "$RUN" --worker scheduled-run-4 \
+            --summary "scheduled step 3 completed" --evidence '["phase2:round4"]' \
+            --cost-usd 0 --quota-units 0 --telemetry-source ci-fixture >/dev/null
+          DB="$DB" python - <<'PY'
+          import json, os
+          from pathlib import Path
+          from par.advancement import advance_once, state_counts
+          db = Path(os.environ["DB"])
+          before = state_counts(path=db)
+          first = advance_once(worker="scheduled-run-5", path=db)
+          second = advance_once(worker="scheduled-run-6", path=db)
+          after = state_counts(path=db)
+          assert first["changed"] is False and first["action"] == "idle"
+          assert second["changed"] is False and second["action"] == "idle"
+          assert before == after
+          assert before == {"tasks": 3, "runs": 3, "events": 9}
+          print(json.dumps({"counts": after, "first_idle": first, "second_idle": second}, indent=2))
+          PY
