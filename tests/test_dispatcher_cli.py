@@ -84,6 +84,7 @@ def test_dispatch_pending_cli_respects_limit(tmp_path: Path) -> None:
                     "action": "inspect_repository",
                     "goal": f"Inspect event {index}",
                     "mode": "read-only",
+                    "required_capabilities": ["repo-read"],
                     "acceptance_criteria": ["evidence exists"],
                     "non_goals": ["no writes"],
                     "risk_permission_tier": "read-only",
