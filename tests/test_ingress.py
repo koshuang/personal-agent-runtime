@@ -51,7 +51,7 @@ def test_idempotent_replay_returns_same_identity_without_noise(tmp_path: Path) -
     assert second["id"] == first["id"]
     assert len(list_events(path=db)) == 1
 
-    with pytest.raises(ValueError, match="different ingress envelope"):
+    with pytest.raises(ValueError, match="different ingress event"):
         ingest_event(**{**kwargs, "payload": {"repo": "different"}})
 
 
