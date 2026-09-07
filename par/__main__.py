@@ -4,6 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
+from .checkpoint import resume_context, write_checkpoint
 from .db import DEFAULT_DB, claim_task, complete_task, create_task, fail_task, get_task, heartbeat, init_db, next_task, retry_task
 from .portability import export_state, restore_state
 from .reconcile import reconcile
@@ -74,6 +75,21 @@ def parser() -> argparse.ArgumentParser:
     beat.add_argument("task_id")
     beat.add_argument("--worker", required=True)
     beat.add_argument("--lease-minutes", type=int, default=30)
+
+    checkpoint = task_sub.add_parser("checkpoint")
+    checkpoint.add_argument("task_id")
+    checkpoint.add_argument("--run-id", required=True)
+    checkpoint.add_argument("--worker", required=True)
+    checkpoint.add_argument("--summary", required=True)
+    checkpoint.add_argument("--completed-steps", default="[]")
+    checkpoint.add_argument("--remaining-steps", default="[]")
+    checkpoint.add_argument("--evidence", default="[]")
+    checkpoint.add_argument("--blockers", default="[]")
+    checkpoint.add_argument("--resume-hint")
+    checkpoint.add_argument("--metadata", default="{}")
+
+    resume = task_sub.add_parser("resume")
+    resume.add_argument("task_id")
 
     retry = task_sub.add_parser("retry")
     retry.add_argument("task_id")
@@ -168,6 +184,22 @@ def main() -> None:
     elif args.task_command == "heartbeat":
         heartbeat(task_id=args.task_id, worker=args.worker, lease_minutes=args.lease_minutes, path=path)
         dump({"ok": True})
+    elif args.task_command == "checkpoint":
+        dump(write_checkpoint(
+            task_id=args.task_id,
+            run_id=args.run_id,
+            worker=args.worker,
+            summary=args.summary,
+            completed_steps=json.loads(args.completed_steps),
+            remaining_steps=json.loads(args.remaining_steps),
+            evidence=json.loads(args.evidence),
+            blockers=json.loads(args.blockers),
+            resume_hint=args.resume_hint,
+            metadata=json.loads(args.metadata),
+            path=path,
+        ))
+    elif args.task_command == "resume":
+        dump(resume_context(task_id=args.task_id, path=path))
     elif args.task_command == "retry":
         dump(retry_task(task_id=args.task_id, actor=args.actor, path=path))
     elif args.task_command == "complete":
