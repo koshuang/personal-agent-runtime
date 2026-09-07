@@ -17,14 +17,14 @@ Status: **active**
 - [x] Workers can heartbeat, complete, fail, and persist `next_action`.
 - [x] Phase 1 read-only policy exists.
 - [ ] The AVTime read-only pilot is executed end-to-end with objective evidence.
-- [ ] A fresh session successfully reconstructs the task state without prior transcript.
-- [ ] Reconciliation can identify stale leases, retryable failures, missing completion evidence, and unmaterialized `next_action`.
+- [x] A fresh session successfully reconstructs task state without prior transcript. Evidence: PR #28/#29 run `produce-state` and `recover-state` on independent GitHub Actions runners using only the portable `.parstate` artifact + task id; the real read-only repo inspection evidence is independently recomputed after restore.
+- [x] Reconciliation can identify stale leases, retryable/failed work, missing completion evidence, and unmaterialized `next_action`. Evidence: `par/reconcile.py`, regression tests, and the Phase 1 pilot observation that surfaced `unmaterialized_next_action` rather than silently declaring DONE.
 - [ ] Runtime exposes enough state for an autonomous scheduler to decide whether to resume, retry, verify, or create one next task.
-- [ ] Core lifecycle tests pass in CI.
+- [x] Core lifecycle tests pass in CI. Evidence: current-head Python/Go CI and the dedicated Shared State cross-runtime workflow are green through PR #29.
 
 ### Exit evidence
 
-At least one real task must survive a full session boundary. “The code exists” is not sufficient evidence.
+A real read-only repository task has now survived a full automation-runtime boundary via the portable Shared State contract (PR #29). The remaining Phase 1 exit item is the target-specific AVTime pilot closure in Issue #1; do not substitute the generic portability proof for that target-specific acceptance criterion.
 
 ## Phase 2 — Reliable Continuous Worker
 
