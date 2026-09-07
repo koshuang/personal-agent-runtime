@@ -13,7 +13,10 @@ _RUNTIME_OWNED_CONTEXT_KEYS = {
     "parent_task_id", "source_ingress_event_id", "ingress_source", "ingress_kind",
     "materialization_action", "materialization_scope", "approval_id", "required_capabilities",
 }
-_READ_ONLY_ACTION_CAPABILITIES = {"inspect_repository": {"repo-read"}}
+_READ_ONLY_ACTION_CAPABILITIES = {
+    "inspect_repository": {"repo-read"},
+    "inspect_github_pull_request_state": {"repo-read"},
+}
 _SQLITE_INT_MIN = -(2**63)
 _SQLITE_INT_MAX = 2**63 - 1
 
@@ -68,7 +71,7 @@ def _task_request(event: dict[str, Any]) -> dict[str, Any]:
     if mode == "read-only":
         allowed = _READ_ONLY_ACTION_CAPABILITIES.get(action)
         if allowed is None: raise ValueError("requested_action.action is not eligible for automatic read-only execution")
-        if risk_permission_tier != "read-only": raise ValueError("read-only mode requires read-only risk_permission_tier")
+        if risk_permission_tier not in {"read-only", "low"}: raise ValueError("read-only mode requires a read-only/low risk_permission_tier")
         if set(required_capabilities) != allowed: raise ValueError("read-only action capabilities do not match the approved action contract")
     else:
         if not scope: raise ValueError("non-read-only requested_action.scope must be non-empty")
