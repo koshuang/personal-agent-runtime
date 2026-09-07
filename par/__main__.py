@@ -9,6 +9,7 @@ from .capabilities import claim_task_if_eligible, declare_worker_capabilities, g
 from .checkpoint import resume_context, write_checkpoint
 from .db import DEFAULT_DB, complete_task, create_task, fail_task, get_task, heartbeat, init_db, next_task, retry_task
 from .ingress import get_event, ingest_event, list_events
+from .materialization import materialize_ingress_event
 from .metrics import metrics_summary, record_run_telemetry, validate_telemetry
 from .portability import export_state, restore_state
 from .reconcile import reconcile
@@ -64,6 +65,8 @@ def parser() -> argparse.ArgumentParser:
     event_show.add_argument("event_id")
     event_list = event_sub.add_parser("list")
     event_list.add_argument("--limit", type=int, default=100)
+    event_materialize = event_sub.add_parser("materialize")
+    event_materialize.add_argument("event_id")
 
     approval = sub.add_parser("approval")
     approval_sub = approval.add_subparsers(dest="approval_command", required=True)
@@ -231,6 +234,8 @@ def main() -> None:
             dump(get_event(args.event_id, path=path) or {"event": None})
         elif args.event_command == "list":
             dump({"events": list_events(limit=args.limit, path=path)})
+        elif args.event_command == "materialize":
+            dump(materialize_ingress_event(args.event_id, path=path))
         return
 
     if args.command == "approval":
