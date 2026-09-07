@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -194,3 +197,86 @@ def test_portability_preserves_approval_decision_evidence(tmp_path: Path) -> Non
     assert recovered["decided_by"] == "kos"
     assert recovered["decision_reason"] == "portable evidence"
     assert recovered["scope"] == {"repo": "koshuang/personal-agent-runtime"}
+
+
+def _cli(db: Path, *args: str) -> dict:
+    completed = subprocess.run(
+        [sys.executable, "-m", "par", "--db", str(db), *args],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return json.loads(completed.stdout)
+
+
+def test_approval_cli_request_show_list_approve_and_reject(tmp_path: Path) -> None:
+    db = tmp_path / "runtime.db"
+    requested = _cli(
+        db,
+        "approval",
+        "request",
+        "--idempotency-key",
+        "cli-approval-1",
+        "--subject-type",
+        "ingress_event",
+        "--subject-id",
+        "evt-cli-1",
+        "--action",
+        "materialize_write_task",
+        "--requested-by",
+        "human",
+        "--scope",
+        '{"repo":"koshuang/personal-agent-runtime","mode":"write"}',
+    )
+    assert requested["status"] == "pending"
+    assert requested["approval_is_blanket_authority"] is False
+
+    shown = _cli(db, "approval", "show", requested["id"])
+    assert shown["id"] == requested["id"]
+
+    pending = _cli(db, "approval", "list", "--status", "pending")
+    assert [item["id"] for item in pending["approvals"]] == [requested["id"]]
+
+    approved = _cli(
+        db,
+        "approval",
+        "approve",
+        requested["id"],
+        "--decided-by",
+        "kos",
+        "--reason",
+        "approve this exact action",
+    )
+    assert approved["status"] == "approved"
+    assert approved["decided_by"] == "kos"
+
+    second = _cli(
+        db,
+        "approval",
+        "request",
+        "--idempotency-key",
+        "cli-approval-2",
+        "--subject-type",
+        "task",
+        "--subject-id",
+        "task-cli-2",
+        "--action",
+        "use_paid_provider",
+        "--requested-by",
+        "scheduler",
+    )
+    rejected = _cli(
+        db,
+        "approval",
+        "reject",
+        second["id"],
+        "--decided-by",
+        "kos",
+        "--reason",
+        "keep zero-cost policy",
+    )
+    assert rejected["status"] == "rejected"
+
+    with connect(db) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0] == 0
