@@ -10,6 +10,8 @@ _DECISION_PRIORITY = {
     "stale_lease": 0,
     "orphan_running_run": 0,
     "failed_work": 1,
+    "retry_budget_exhausted": 1,
+    "dead_letter": 1,
     "completion_evidence_gap": 2,
     "unmaterialized_next_action": 3,
 }
@@ -36,8 +38,23 @@ def _decision_from_finding(finding: dict[str, Any], *, path: Path) -> dict[str, 
             "decision": "retry",
             "task_id": task_id,
             "run_id": finding.get("run_id"),
-            "reason": "Failed work requires retry classification; Phase 1 does not retry automatically.",
+            "reason": "Failed work is within its retry budget but Phase 2 does not retry automatically.",
             "finding_type": finding_type,
+            "attempt_count": finding.get("attempt_count"),
+            "max_attempts": finding.get("max_attempts"),
+            "requires_human": True,
+            "safe_to_auto_execute": False,
+        }
+
+    if finding_type in {"retry_budget_exhausted", "dead_letter"}:
+        return {
+            "decision": "dead_letter",
+            "task_id": task_id,
+            "run_id": finding.get("run_id"),
+            "reason": "Retry budget is exhausted or the task is already terminal; automatic retry is forbidden.",
+            "finding_type": finding_type,
+            "attempt_count": finding.get("attempt_count"),
+            "max_attempts": finding.get("max_attempts"),
             "requires_human": True,
             "safe_to_auto_execute": False,
         }
