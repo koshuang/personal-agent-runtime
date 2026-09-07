@@ -9,6 +9,7 @@ from .capabilities import claim_task_if_eligible, declare_worker_capabilities, g
 from .checkpoint import resume_context, write_checkpoint
 from .commands import resolve_command
 from .db import DEFAULT_DB, complete_task, create_task, fail_task, get_task, heartbeat, init_db, next_task, retry_task
+from .dispatcher import dispatch_pending_events
 from .ingress import get_event, ingest_event, list_events
 from .materialization import materialize_ingress_event
 from .metrics import metrics_summary, record_run_telemetry, validate_telemetry
@@ -61,6 +62,11 @@ def parser() -> argparse.ArgumentParser:
         if name == "fix":
             command_parser.add_argument("--finding-type")
             command_parser.add_argument("--task-id")
+
+    dispatch = sub.add_parser("dispatch")
+    dispatch_sub = dispatch.add_subparsers(dest="dispatch_command", required=True)
+    dispatch_pending = dispatch_sub.add_parser("pending")
+    dispatch_pending.add_argument("--limit", type=int, default=100)
 
     event = sub.add_parser("event")
     event_sub = event.add_subparsers(dest="event_command", required=True)
@@ -236,6 +242,12 @@ def main() -> None:
             task_id=getattr(args, "task_id", None),
             path=path,
         ))
+        return
+
+    if args.command == "dispatch":
+        init_db(path)
+        if args.dispatch_command == "pending":
+            dump(dispatch_pending_events(limit=args.limit, path=path))
         return
 
     if args.command == "event":
