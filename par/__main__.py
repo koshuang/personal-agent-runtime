@@ -229,7 +229,6 @@ def main() -> None:
         return
 
     if args.command == "command":
-        init_db(path)
         dump(resolve_command(
             args.runtime_command,
             worker=args.worker,
