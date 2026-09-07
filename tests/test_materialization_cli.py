@@ -40,6 +40,11 @@ def test_event_materialize_cli_is_bounded_and_idempotent(tmp_path: Path) -> None
                 "mode": "read-only",
                 "scope": {"repo": "koshuang/personal-agent-runtime"},
                 "required_capabilities": ["repo-read"],
+                "acceptance_criteria": ["materialization decision is deterministic"],
+                "non_goals": ["execute the materialized task"],
+                "risk_permission_tier": "low",
+                "evidence_required": ["persisted queued task"],
+                "expected_next_state_transition": "ingress event -> queued task",
             }
         ),
     )
