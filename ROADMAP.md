@@ -28,21 +28,27 @@ Phase 1 exit evidence is complete. A real read-only repository task survived a f
 
 ## Phase 2 — Reliable Continuous Worker
 
-Status: **active**
+Status: **complete**
 
-Target capabilities:
+### Definition of Done
 
-- deterministic Reconciliation loop;
-- retry policy and dead-letter state;
-- idempotency keys / duplicate prevention across triggers;
-- structured checkpoint / resume context;
-- worker capability declarations;
-- minimal execution metrics and cost/quota metadata;
-- scheduled worker can repeatedly advance state without creating noise or duplicate work.
+- [x] Deterministic Reconciliation loop identifies stale/interrupted/failed/evidence-gap/next-action states.
+- [x] Retry policy is bounded and exhausted work enters dead-letter state. Evidence: Issue #38 + PR #39.
+- [x] Idempotency keys prevent duplicate task creation across repeated triggers.
+- [x] Structured checkpoint / resume context survives fresh sessions. Evidence: Issue #41 + PR #42.
+- [x] Worker capability declarations make task eligibility deterministic without expanding authority. Evidence: Issue #44 + PR #47.
+- [x] Independent worker / critic role separation prevents self-review closure. Evidence: Issue #3 + PR #35.
+- [x] Minimal execution telemetry records duration / cost / quota evidence while preserving unknown-vs-zero semantics. Evidence: Issue #48 + PR #52.
+- [x] Scheduled workers can repeatedly advance durable state across fresh automation runtimes without duplicate/noise. Evidence: Issue #53 + PR #54 dedicated repeated-advancement workflow.
+- [x] Portable Shared State, canonical CI, and AVTime portability continue to pass throughout Phase 2 changes.
 
-Current design track: Issue #3 adds independent worker/reviewer role separation and blind-spot review. Keep Phase 2 work evidence-driven and do not weaken existing zero-cost, credential, or side-effect boundaries.
+### Exit evidence
+
+Phase 2 exit evidence is complete. PR #54 proved a chain across multiple fresh GitHub Actions runtimes: seed → materialize successor → complete with persisted next action → materialize final successor → complete → idle → idle. Portable `.parstate` carried identity between runs, deterministic successor idempotency prevented duplication, and terminal counts remained exactly `tasks=3, runs=3, events=9` across repeated idle wake-ups. Reconciliation was also hardened so a completed persisted successor remains evidence that a parent `next_action` was already materialized rather than recreating the same task.
 
 ## Phase 3 — Unified Active + Passive Control
+
+Status: **active**
 
 Target capabilities:
 
@@ -50,6 +56,8 @@ Target capabilities:
 - `Chk / Fix / Continue` operate on durable state instead of a specific chat session;
 - event ingestion is idempotent;
 - human approval is represented as explicit state.
+
+Current direction: first define a provider-neutral ingress event envelope and one durable event-ingestion path that can represent schedule / human / API / webhook triggers without granting new execution authority. Keep Issue #14 remote MCP stable-HTTPS verification as a separate human-only boundary until `agent.koshuang.com` is configured.
 
 ## Phase 4 — Event-driven Runtime
 
