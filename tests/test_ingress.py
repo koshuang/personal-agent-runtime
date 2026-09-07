@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import subprocess
 import sys
 from pathlib import Path
@@ -65,6 +66,21 @@ def test_invalid_envelope_fails_closed(tmp_path: Path) -> None:
         ingest_event(idempotency_key="x", source="api", kind="", path=db)
     with pytest.raises(ValueError):
         ingest_event(idempotency_key="x", source="api", kind="x", payload=[], path=db)  # type: ignore[arg-type]
+
+
+def test_non_finite_json_numbers_fail_closed(tmp_path: Path) -> None:
+    db = tmp_path / "runtime.db"
+    init_db(db)
+    for value in (math.nan, math.inf, -math.inf):
+        with pytest.raises(ValueError, match="finite JSON numbers"):
+            ingest_event(
+                idempotency_key=f"bad-{value}",
+                source="api",
+                kind="x",
+                payload={"nested": [1, {"value": value}]},
+                path=db,
+            )
+    assert list_events(path=db) == []
 
 
 def test_portability_preserves_ingress_identity(tmp_path: Path) -> None:
