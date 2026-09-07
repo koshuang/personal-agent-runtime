@@ -102,6 +102,62 @@ def test_checkpoint_rejects_wrong_worker_and_inactive_run(tmp_path: Path) -> Non
         )
 
 
+def test_checkpoint_rejects_expired_lease(tmp_path: Path) -> None:
+    db = tmp_path / "runtime.db"
+    init_db(db)
+    task = create_task(goal="expired ownership", path=db)
+    claimed = claim_task(task_id=task["id"], worker="worker-1", path=db)
+
+    from par.db import connect
+
+    with connect(db) as conn:
+        conn.execute(
+            "UPDATE tasks SET lease_expires_at='2000-01-01T00:00:00+00:00' WHERE id=?",
+            (task["id"],),
+        )
+
+    with pytest.raises(RuntimeError, match="actively owned"):
+        write_checkpoint(
+            task_id=task["id"],
+            run_id=claimed["run_id"],
+            worker="worker-1",
+            summary="stale worker must not write",
+            path=db,
+        )
+    assert latest_checkpoint(task_id=task["id"], path=db) is None
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("completed_steps", "not-a-list", "completed_steps must be a list"),
+        ("remaining_steps", {"step": 1}, "remaining_steps must be a list"),
+        ("evidence", "not-a-list", "evidence must be a list"),
+        ("blockers", {"reason": "x"}, "blockers must be a list"),
+        ("metadata", ["not-an-object"], "metadata must be an object"),
+    ],
+)
+def test_checkpoint_rejects_invalid_structured_shapes(
+    tmp_path: Path, field: str, value: object, message: str
+) -> None:
+    db = tmp_path / "runtime.db"
+    init_db(db)
+    task = create_task(goal="shape validation", path=db)
+    claimed = claim_task(task_id=task["id"], worker="worker-1", path=db)
+    kwargs = {
+        "task_id": task["id"],
+        "run_id": claimed["run_id"],
+        "worker": "worker-1",
+        "summary": "invalid payload",
+        "path": db,
+        field: value,
+    }
+
+    with pytest.raises(ValueError, match=message):
+        write_checkpoint(**kwargs)  # type: ignore[arg-type]
+    assert latest_checkpoint(task_id=task["id"], path=db) is None
+
+
 def test_checkpoint_emits_audit_event(tmp_path: Path) -> None:
     db = tmp_path / "runtime.db"
     init_db(db)
