@@ -13,6 +13,11 @@ def _task_count(db: Path) -> int:
         return conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
 
 
+def _status(db: Path, event_id: str) -> str:
+    with connect(db) as conn:
+        return conn.execute("SELECT status FROM ingress_events WHERE id=?", (event_id,)).fetchone()[0]
+
+
 def _safe_event(db: Path, key: str) -> dict:
     return ingest_event(
         idempotency_key=key,
@@ -40,29 +45,39 @@ def _safe_event(db: Path, key: str) -> dict:
 def test_dispatcher_materializes_safe_event_exactly_once(tmp_path: Path) -> None:
     db = tmp_path / "runtime.db"
     init_db(db)
-    _safe_event(db, "safe-1")
+    event = _safe_event(db, "safe-1")
     first = dispatch_pending_events(path=db)
     second = dispatch_pending_events(path=db)
     assert first["materialized"] == 1
+    assert second["scanned"] == 0
     assert second["materialized"] == 0
-    assert second["already_materialized"] == 1
+    assert second["already_materialized"] == 0
+    assert _status(db, event["id"]) == "materialized"
     assert _task_count(db) == 1
 
 
-def test_dispatcher_blocks_write_like_event(tmp_path: Path) -> None:
+def test_dispatcher_blocks_write_like_event_once_without_starving_following_safe_work(tmp_path: Path) -> None:
     db = tmp_path / "runtime.db"
     init_db(db)
-    ingest_event(
+    blocked_event = ingest_event(
         idempotency_key="write-1",
         source="human",
         kind="continue",
         requested_action={"type": "task", "mode": "write"},
         path=db,
     )
-    result = dispatch_pending_events(path=db)
-    assert result["materialized"] == 0
-    assert result["blocked"] == 1
-    assert _task_count(db) == 0
+    safe_event = _safe_event(db, "safe-after-blocked")
+
+    first = dispatch_pending_events(limit=1, path=db)
+    second = dispatch_pending_events(limit=1, path=db)
+    third = dispatch_pending_events(limit=1, path=db)
+
+    assert first["blocked"] == 1
+    assert _status(db, blocked_event["id"]) == "blocked_auto_dispatch"
+    assert second["materialized"] == 1
+    assert second["results"][0]["event_id"] == safe_event["id"]
+    assert third["scanned"] == 0
+    assert _task_count(db) == 1
 
 
 def test_dispatcher_uses_deterministic_bounded_batch(tmp_path: Path) -> None:
@@ -73,6 +88,10 @@ def test_dispatcher_uses_deterministic_bounded_batch(tmp_path: Path) -> None:
     assert result["scanned"] == 2
     assert [item["event_id"] for item in result["results"]] == [events[0]["id"], events[1]["id"]]
     assert _task_count(db) == 2
+    follow_up = dispatch_pending_events(limit=2, path=db)
+    assert follow_up["scanned"] == 1
+    assert follow_up["results"][0]["event_id"] == events[2]["id"]
+    assert _task_count(db) == 3
 
 
 def test_fresh_runtime_recovers_ingested_but_unmaterialized_event(tmp_path: Path) -> None:
@@ -88,5 +107,6 @@ def test_fresh_runtime_recovers_ingested_but_unmaterialized_event(tmp_path: Path
     assert result["results"][0]["event_id"] == event["id"]
     assert _task_count(restored) == 1
     again = dispatch_pending_events(path=restored)
+    assert again["scanned"] == 0
     assert again["materialized"] == 0
-    assert again["already_materialized"] == 1
+    assert _status(restored, event["id"]) == "materialized"
