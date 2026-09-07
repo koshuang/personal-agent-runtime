@@ -22,13 +22,27 @@ Dispatcher **只允許自動 materialize safe read-only ingress**。
 
 Materialized identity 使用既有 `ingress-event:<event_id>` idempotency namespace，不建立第二套 event↔task mapping store。
 
+### Durable ingress status
+
+Dispatcher 使用 ingress record 既有的 `status` 欄位記錄 auto-dispatch terminal state：
+
+```text
+received
+  ├─→ materialized
+  ├─→ blocked_auto_dispatch
+  └─→ invalid_auto_dispatch
+```
+
+這避免 blocked/invalid event 每輪都重新佔據 bounded batch 前端，造成後續 safe event starvation。Repeated dispatcher run 只掃描 `received`，因此 terminal state 不產生新的 task/event noise。
+
 ### `dispatch_pending_events(limit=N)`
 
+- 只掃描 `status=received`
 - 依 durable ingress `created_at, id` deterministic ordering
 - `1 <= limit <= 1000`
 - bounded scan
 - 每個 event 使用相同 `dispatch_event()` contract
-- repeated run 對已完成 materialization 的 state 不建立新 task/event noise
+- repeated run 對 terminal state 不建立新 task/event noise
 
 ## CLI
 
@@ -41,6 +55,8 @@ par dispatch pending --limit 100
 - event consumer 在 ingest 後立即呼叫
 - hourly watchdog 定期呼叫，補救 ingest→materialize 之間的 crash gap
 
+CLI 與 library path 共用相同 dispatcher contract。
+
 ## Crash recovery
 
 ```text
@@ -52,7 +68,7 @@ ingest event
 → exactly one queued read-only task
 ```
 
-已 materialized 的 event 在 fresh runtime 重跑仍回 `already_materialized`，不 duplicate。
+`.parstate` 會保留 ingress status；已 terminal 的 event 不會在 fresh runtime 被重新 auto-dispatch。
 
 ## Safety boundary
 
