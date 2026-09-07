@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from par.approvals import decide_approval, get_approval, list_approvals, request_approval
+from par.approvals import decide_approval, expire_approval, get_approval, list_approvals, request_approval
 from par.db import connect, init_db
 from par.portability import export_state, restore_state
 
@@ -91,6 +91,37 @@ def test_rejected_decision_is_terminal(tmp_path: Path) -> None:
             decision="approved",
             decided_by="kos",
             reason="flip",
+            path=db,
+        )
+
+
+def test_expired_decision_is_terminal(tmp_path: Path) -> None:
+    db = tmp_path / "runtime.db"
+    init_db(db)
+    request = request_approval(
+        idempotency_key="approval-expired",
+        subject_type="task",
+        subject_id="task-expired",
+        action="write_repository",
+        requested_by="scheduler",
+        path=db,
+    )
+    expired = expire_approval(
+        request["id"],
+        actor="scheduler",
+        reason="deadline elapsed",
+        path=db,
+    )
+    assert expired["status"] == "expired"
+    assert expired["decided_by"] == "scheduler"
+    assert expired["decision_reason"] == "deadline elapsed"
+    assert expired["decided_at"] is not None
+    with pytest.raises(ValueError, match="terminal"):
+        decide_approval(
+            request["id"],
+            decision="approved",
+            decided_by="kos",
+            reason="late approval",
             path=db,
         )
 
