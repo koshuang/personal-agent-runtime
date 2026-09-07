@@ -7,6 +7,7 @@ from pathlib import Path
 from .approvals import decide_approval, get_approval, list_approvals, request_approval
 from .capabilities import claim_task_if_eligible, declare_worker_capabilities, get_worker_capabilities
 from .checkpoint import resume_context, write_checkpoint
+from .commands import resolve_command
 from .db import DEFAULT_DB, complete_task, create_task, fail_task, get_task, heartbeat, init_db, next_task, retry_task
 from .ingress import get_event, ingest_event, list_events
 from .materialization import materialize_ingress_event
@@ -51,6 +52,15 @@ def parser() -> argparse.ArgumentParser:
     scheduler_sub = scheduler.add_subparsers(dest="scheduler_command", required=True)
     scheduler_decide = scheduler_sub.add_parser("decide")
     scheduler_decide.add_argument("--worker")
+
+    command = sub.add_parser("command")
+    command_sub = command.add_subparsers(dest="runtime_command", required=True)
+    for name in ("chk", "continue", "fix"):
+        command_parser = command_sub.add_parser(name)
+        command_parser.add_argument("--worker")
+        if name == "fix":
+            command_parser.add_argument("--finding-type")
+            command_parser.add_argument("--task-id")
 
     event = sub.add_parser("event")
     event_sub = event.add_subparsers(dest="event_command", required=True)
@@ -216,6 +226,16 @@ def main() -> None:
         init_db(path)
         if args.scheduler_command == "decide":
             dump(decide(worker=args.worker, path=path))
+        return
+
+    if args.command == "command":
+        dump(resolve_command(
+            args.runtime_command,
+            worker=args.worker,
+            finding_type=getattr(args, "finding_type", None),
+            task_id=getattr(args, "task_id", None),
+            path=path,
+        ))
         return
 
     if args.command == "event":
