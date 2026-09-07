@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from .capabilities import evaluate_worker_eligibility
 from .db import DEFAULT_DB, get_task, next_task
 from .reconcile import reconcile
 
@@ -85,7 +86,7 @@ def _decision_from_finding(finding: dict[str, Any], *, path: Path) -> dict[str, 
     raise ValueError(f"unsupported scheduler finding type: {finding_type}")
 
 
-def decide(*, path: Path = DEFAULT_DB) -> dict[str, Any]:
+def decide(*, worker: str | None = None, path: Path = DEFAULT_DB) -> dict[str, Any]:
     """Project durable Runtime state into one deterministic, read-only scheduler decision."""
 
     reconciliation = reconcile(path=path)
@@ -107,12 +108,27 @@ def decide(*, path: Path = DEFAULT_DB) -> dict[str, Any]:
     task = next_task(path=path)
     if task:
         read_only = task.get("mode") == "read-only"
+        eligibility = evaluate_worker_eligibility(task=task, worker=worker, path=path)
+        if not eligibility["eligible"]:
+            return {
+                "decision": "await_capable_worker",
+                "task_id": task["id"],
+                "run_id": None,
+                "reason": eligibility["reason"],
+                "finding_type": "worker_capability_gap",
+                "worker": worker,
+                "eligibility": eligibility,
+                "requires_human": False,
+                "safe_to_auto_execute": False,
+            }
         return {
             "decision": "execute",
             "task_id": task["id"],
             "run_id": None,
-            "reason": "Eligible queued task is available and no higher-priority reconciliation finding exists.",
+            "reason": "Eligible queued task is available and the worker satisfies all required capabilities.",
             "finding_type": None,
+            "worker": worker,
+            "eligibility": eligibility,
             "requires_human": not read_only,
             "safe_to_auto_execute": read_only,
         }
@@ -123,6 +139,7 @@ def decide(*, path: Path = DEFAULT_DB) -> dict[str, Any]:
         "run_id": None,
         "reason": "No reconciliation finding or eligible queued task requires action.",
         "finding_type": None,
+        "worker": worker,
         "requires_human": False,
         "safe_to_auto_execute": False,
     }
