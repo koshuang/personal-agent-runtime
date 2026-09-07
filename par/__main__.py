@@ -7,6 +7,7 @@ from pathlib import Path
 from .capabilities import claim_task_if_eligible, declare_worker_capabilities, get_worker_capabilities
 from .checkpoint import resume_context, write_checkpoint
 from .db import DEFAULT_DB, complete_task, create_task, fail_task, get_task, heartbeat, init_db, next_task, retry_task
+from .metrics import metrics_summary, record_run_telemetry, validate_telemetry
 from .portability import export_state, restore_state
 from .reconcile import reconcile
 from .review import submit_review
@@ -17,6 +18,13 @@ def dump(value):
     print(json.dumps(value, ensure_ascii=False, indent=2))
 
 
+def _telemetry_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--duration-ms", type=int)
+    parser.add_argument("--cost-usd", type=float)
+    parser.add_argument("--quota-units", type=float)
+    parser.add_argument("--telemetry-source")
+
+
 def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="par")
     p.add_argument("--db", default=str(DEFAULT_DB))
@@ -24,6 +32,10 @@ def parser() -> argparse.ArgumentParser:
 
     sub.add_parser("init")
     sub.add_parser("reconcile")
+
+    metrics = sub.add_parser("metrics")
+    metrics_sub = metrics.add_subparsers(dest="metrics_command", required=True)
+    metrics_sub.add_parser("summary")
 
     scheduler = sub.add_parser("scheduler")
     scheduler_sub = scheduler.add_subparsers(dest="scheduler_command", required=True)
@@ -115,6 +127,7 @@ def parser() -> argparse.ArgumentParser:
     complete.add_argument("--blockers", default="[]")
     complete.add_argument("--next-action")
     complete.add_argument("--metadata", default="{}")
+    _telemetry_args(complete)
 
     fail = task_sub.add_parser("fail")
     fail.add_argument("task_id")
@@ -122,6 +135,7 @@ def parser() -> argparse.ArgumentParser:
     fail.add_argument("--worker", required=True)
     fail.add_argument("--summary", required=True)
     fail.add_argument("--blockers", default="[]")
+    _telemetry_args(fail)
 
     show = task_sub.add_parser("show")
     show.add_argument("task_id")
@@ -141,6 +155,12 @@ def main() -> None:
     if args.command == "reconcile":
         init_db(path)
         dump(reconcile(path=path))
+        return
+
+    if args.command == "metrics":
+        init_db(path)
+        if args.metrics_command == "summary":
+            dump(metrics_summary(path=path))
         return
 
     if args.command == "scheduler":
@@ -238,11 +258,15 @@ def main() -> None:
     elif args.task_command == "retry":
         dump(retry_task(task_id=args.task_id, actor=args.actor, path=path))
     elif args.task_command == "complete":
+        telemetry = validate_telemetry(duration_ms=args.duration_ms, cost_usd=args.cost_usd, quota_units=args.quota_units, source=args.telemetry_source)
         complete_task(task_id=args.task_id, run_id=args.run_id, worker=args.worker, summary=args.summary, evidence=json.loads(args.evidence), blockers=json.loads(args.blockers), next_action=args.next_action, metadata=json.loads(args.metadata), path=path)
-        dump({"ok": True})
+        recorded = record_run_telemetry(task_id=args.task_id, run_id=args.run_id, worker=args.worker, path=path, **telemetry)
+        dump({"ok": True, "telemetry": recorded})
     elif args.task_command == "fail":
+        telemetry = validate_telemetry(duration_ms=args.duration_ms, cost_usd=args.cost_usd, quota_units=args.quota_units, source=args.telemetry_source)
         fail_task(task_id=args.task_id, run_id=args.run_id, worker=args.worker, summary=args.summary, blockers=json.loads(args.blockers), path=path)
-        dump({"ok": True})
+        recorded = record_run_telemetry(task_id=args.task_id, run_id=args.run_id, worker=args.worker, path=path, **telemetry)
+        dump({"ok": True, "telemetry": recorded})
     elif args.task_command == "show":
         dump(get_task(args.task_id, path=path) or {"task": None})
 
