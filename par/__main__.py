@@ -4,8 +4,9 @@ import argparse
 import json
 from pathlib import Path
 
+from .capabilities import claim_task_if_eligible, declare_worker_capabilities, get_worker_capabilities
 from .checkpoint import resume_context, write_checkpoint
-from .db import DEFAULT_DB, claim_task, complete_task, create_task, fail_task, get_task, heartbeat, init_db, next_task, retry_task
+from .db import DEFAULT_DB, complete_task, create_task, fail_task, get_task, heartbeat, init_db, next_task, retry_task
 from .portability import export_state, restore_state
 from .reconcile import reconcile
 from .review import submit_review
@@ -26,7 +27,16 @@ def parser() -> argparse.ArgumentParser:
 
     scheduler = sub.add_parser("scheduler")
     scheduler_sub = scheduler.add_subparsers(dest="scheduler_command", required=True)
-    scheduler_sub.add_parser("decide")
+    scheduler_decide = scheduler_sub.add_parser("decide")
+    scheduler_decide.add_argument("--worker")
+
+    worker_cmd = sub.add_parser("worker")
+    worker_sub = worker_cmd.add_subparsers(dest="worker_command", required=True)
+    worker_declare = worker_sub.add_parser("declare")
+    worker_declare.add_argument("--worker", required=True)
+    worker_declare.add_argument("--capability", action="append", default=[])
+    worker_show = worker_sub.add_parser("show")
+    worker_show.add_argument("--worker", required=True)
 
     review = sub.add_parser("review")
     review_sub = review.add_subparsers(dest="review_command", required=True)
@@ -57,6 +67,7 @@ def parser() -> argparse.ArgumentParser:
     create.add_argument("--mode", default="read-only")
     create.add_argument("--priority", type=int, default=100)
     create.add_argument("--context", default="{}", help="JSON object")
+    create.add_argument("--required-capability", action="append", default=[])
     create.add_argument("--idempotency-key")
     create.add_argument("--max-attempts", type=int, default=3)
 
@@ -135,7 +146,15 @@ def main() -> None:
     if args.command == "scheduler":
         init_db(path)
         if args.scheduler_command == "decide":
-            dump(decide(path=path))
+            dump(decide(worker=args.worker, path=path))
+        return
+
+    if args.command == "worker":
+        init_db(path)
+        if args.worker_command == "declare":
+            dump(declare_worker_capabilities(worker=args.worker, capabilities=args.capability, path=path))
+        elif args.worker_command == "show":
+            dump({"worker": args.worker, "capabilities": get_worker_capabilities(worker=args.worker, path=path), "authoritative": False})
         return
 
     if args.command == "review":
@@ -165,12 +184,20 @@ def main() -> None:
 
     if args.task_command == "create":
         init_db(path)
+        context = json.loads(args.context)
+        if not isinstance(context, dict):
+            raise ValueError("task context must be a JSON object")
+        if args.required_capability:
+            existing = context.get("required_capabilities", [])
+            if existing and (not isinstance(existing, list) or not all(isinstance(value, str) for value in existing)):
+                raise ValueError("context required_capabilities must be a list of strings")
+            context["required_capabilities"] = list(existing) + list(args.required_capability)
         dump(create_task(
             goal=args.goal,
             repo=args.repo,
             mode=args.mode,
             priority=args.priority,
-            context=json.loads(args.context),
+            context=context,
             idempotency_key=args.idempotency_key,
             max_attempts=args.max_attempts,
             path=path,
@@ -180,7 +207,15 @@ def main() -> None:
         task = next_task(path=path)
         dump(task or {"task": None})
     elif args.task_command == "claim":
-        dump(claim_task(task_id=args.task_id, worker=args.worker, lease_minutes=args.lease_minutes, role=args.role, provider=args.provider, model=args.model, path=path))
+        dump(claim_task_if_eligible(
+            task_id=args.task_id,
+            worker=args.worker,
+            lease_minutes=args.lease_minutes,
+            role=args.role,
+            provider=args.provider,
+            model=args.model,
+            path=path,
+        ))
     elif args.task_command == "heartbeat":
         heartbeat(task_id=args.task_id, worker=args.worker, lease_minutes=args.lease_minutes, path=path)
         dump({"ok": True})
