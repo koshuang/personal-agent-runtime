@@ -18,8 +18,10 @@ def _required_string(value: Any, *, name: str) -> str:
 def _repository(value: Any) -> str:
     repo = _required_string(value, name="repository")
     parts = repo.split("/")
-    if len(parts) != 2 or not all(part.strip() for part in parts):
+    if len(parts) != 2 or not all(part for part in parts):
         raise ValueError("repository must be in owner/name form")
+    if any(part != part.strip() for part in parts):
+        raise ValueError("repository owner/name components must not contain surrounding whitespace")
     return repo
 
 
@@ -30,8 +32,6 @@ def _pull_request_number(value: Any) -> int:
 
 
 def _payload(value: Any) -> dict[str, Any]:
-    if value is None:
-        return {}
     if not isinstance(value, dict):
         raise ValueError("payload must be a JSON object")
     return value
@@ -43,7 +43,7 @@ def ingest_github_pr_event(
     delivery_id: str,
     repository: str,
     pull_request_number: int,
-    payload: dict[str, Any] | None = None,
+    payload: dict[str, Any],
     path: Path = DEFAULT_DB,
 ) -> dict[str, Any]:
     """Normalize one bounded GitHub PR event into the existing durable ingress contract."""
