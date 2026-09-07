@@ -48,6 +48,12 @@ def _task_request(event: dict[str, Any]) -> dict[str, Any]:
     if isinstance(priority, bool) or not isinstance(priority, int):
         raise ValueError("requested_action.priority must be an integer")
 
+    if mode != "read-only":
+        if not scope:
+            raise ValueError("non-read-only requested_action.scope must be non-empty")
+        if repo is not None and scope.get("repo") != repo:
+            raise ValueError("non-read-only requested_action.scope.repo must exactly match requested_action.repo")
+
     return {
         "action": action,
         "goal": goal,
