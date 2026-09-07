@@ -32,6 +32,26 @@ def _ensure_schema(conn) -> None:
     conn.executescript(CHECKPOINT_SCHEMA)
 
 
+def _validate_shapes(
+    *,
+    completed_steps: Any,
+    remaining_steps: Any,
+    evidence: Any,
+    blockers: Any,
+    metadata: Any,
+) -> None:
+    for name, value in (
+        ("completed_steps", completed_steps),
+        ("remaining_steps", remaining_steps),
+        ("evidence", evidence),
+        ("blockers", blockers),
+    ):
+        if value is not None and not isinstance(value, list):
+            raise ValueError(f"{name} must be a list")
+    if metadata is not None and not isinstance(metadata, dict):
+        raise ValueError("metadata must be an object")
+
+
 def write_checkpoint(
     *,
     task_id: str,
@@ -48,6 +68,13 @@ def write_checkpoint(
 ) -> dict[str, Any]:
     if not summary.strip():
         raise ValueError("summary must be non-empty")
+    _validate_shapes(
+        completed_steps=completed_steps,
+        remaining_steps=remaining_steps,
+        evidence=evidence,
+        blockers=blockers,
+        metadata=metadata,
+    )
 
     checkpoint_id = str(uuid.uuid4())
     ts = now_iso()
@@ -65,8 +92,19 @@ def write_checkpoint(
 
     with connect(path) as conn:
         _ensure_schema(conn)
-        task = conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
-        if not task or task["status"] != "claimed" or task["claimed_by"] != worker:
+        # Acquire the SQLite write lock before checking ownership. This makes the
+        # ownership/lease/run validation and checkpoint persistence one atomic
+        # state transition relative to completion, expiry/reclaim, or reassignment.
+        conn.execute("BEGIN IMMEDIATE")
+        task = conn.execute(
+            """
+            SELECT * FROM tasks
+            WHERE id=? AND status='claimed' AND claimed_by=?
+              AND lease_expires_at IS NOT NULL AND lease_expires_at>?
+            """,
+            (task_id, worker, ts),
+        ).fetchone()
+        if not task:
             raise RuntimeError("task is not actively owned by this worker")
 
         run = conn.execute(
