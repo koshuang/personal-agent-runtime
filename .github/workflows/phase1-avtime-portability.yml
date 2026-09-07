@@ -1,0 +1,127 @@
+name: Phase 1 AVTime target portability
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/phase1-avtime-portability.yml"
+      - "par/**"
+      - "tests/**"
+      - "pyproject.toml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  produce-avtime-state:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install runtime
+        run: python -m pip install -e .
+      - name: Create completed AVTime target task and export state
+        shell: bash
+        run: |
+          set -euo pipefail
+          DB="$RUNNER_TEMP/producer/runtime.db"
+          mkdir -p "$(dirname "$DB")" evidence
+          python -m par --db "$DB" init >/dev/null
+
+          CREATE_JSON=$(python -m par --db "$DB" task create \
+            --goal "Inspect imhere-tw/avtime-backend open PR state read-only and preserve the result for a fresh worker session." \
+            --repo imhere-tw/avtime-backend \
+            --mode read-only \
+            --context '{"source_issue":"https://github.com/koshuang/personal-agent-runtime/issues/1","target_reference":"https://github.com/imhere-tw/avtime-backend/issues/137","policy":"policies/phase1-readonly.yaml","evidence_provenance":"authorized GitHub connector fresh read at 2026-09-07T08:27+08:00"}')
+          TASK_ID=$(printf '%s' "$CREATE_JSON" | python -c 'import json,sys; print(json.load(sys.stdin)["id"])')
+
+          CLAIM_JSON=$(python -m par --db "$DB" task claim "$TASK_ID" --worker avtime-producer)
+          RUN_ID=$(printf '%s' "$CLAIM_JSON" | python -c 'import json,sys; print(json.load(sys.stdin)["run_id"])')
+
+          python -m par --db "$DB" task complete "$TASK_ID" \
+            --run-id "$RUN_ID" \
+            --worker avtime-producer \
+            --summary "Fresh authorized GitHub read observed zero open PRs in imhere-tw/avtime-backend; no target or production writes were performed." \
+            --evidence '["github-connector://imhere-tw/avtime-backend/open-prs?count=0","target-reference:https://github.com/imhere-tw/avtime-backend/issues/137"]' \
+            --blockers '[]' \
+            --next-action "Fresh independent runtime must restore this exact AVTime task and explain its status, evidence, blockers, and next action without prior transcript." \
+            --metadata '{"target_repo_writes":0,"production_writes":0,"paid_api_usd":0,"credential_access":false,"open_pr_count":0,"observed_at":"2026-09-07T08:27+08:00"}'
+
+          python -m par --db "$DB" task show "$TASK_ID" > evidence/expected.json
+          printf '%s\n' "$TASK_ID" > evidence/task-id.txt
+          python -m par --db "$DB" state export evidence/avtime-state.parstate >/dev/null
+
+      - name: Upload AVTime portable state
+        uses: actions/upload-artifact@v4
+        with:
+          name: avtime-phase1-portable-state
+          path: |
+            evidence/avtime-state.parstate
+            evidence/task-id.txt
+            evidence/expected.json
+          if-no-files-found: error
+          retention-days: 1
+
+  recover-avtime-state:
+    needs: produce-avtime-state
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install runtime
+        run: python -m pip install -e .
+      - name: Download portable state from producer runner
+        uses: actions/download-artifact@v5
+        with:
+          name: avtime-phase1-portable-state
+          path: evidence
+      - name: Restore exact AVTime task and verify transcript-free recovery
+        shell: bash
+        run: |
+          set -euo pipefail
+          TASK_ID=$(cat evidence/task-id.txt)
+          DB="$RUNNER_TEMP/fresh-avtime-runtime/runtime.db"
+          mkdir -p "$(dirname "$DB")"
+          test ! -e "$DB"
+
+          python -m par --db "$DB" state restore evidence/avtime-state.parstate >/dev/null
+          python -m par --db "$DB" task show "$TASK_ID" > evidence/recovered.json
+
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          expected = json.loads(Path("evidence/expected.json").read_text())
+          recovered = json.loads(Path("evidence/recovered.json").read_text())
+
+          assert recovered["id"] == expected["id"]
+          assert recovered["repo"] == "imhere-tw/avtime-backend"
+          assert recovered["status"] == "completed"
+          assert recovered["next_action"] == expected["next_action"]
+          assert recovered["context_json"] == expected["context_json"]
+          assert [r["id"] for r in recovered["runs"]] == [r["id"] for r in expected["runs"]]
+          assert [e["id"] for e in recovered["events"]] == [e["id"] for e in expected["events"]]
+
+          run = recovered["runs"][-1]
+          assert run["summary"] == "Fresh authorized GitHub read observed zero open PRs in imhere-tw/avtime-backend; no target or production writes were performed."
+          assert json.loads(run["evidence_json"])[0] == "github-connector://imhere-tw/avtime-backend/open-prs?count=0"
+          assert json.loads(run["blockers_json"]) == []
+          metadata = json.loads(run["metadata_json"])
+          assert metadata["target_repo_writes"] == 0
+          assert metadata["production_writes"] == 0
+          assert metadata["paid_api_usd"] == 0
+          assert metadata["credential_access"] is False
+          assert metadata["open_pr_count"] == 0
+          PY
+
+      - name: Upload AVTime recovery evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: avtime-phase1-recovery-evidence
+          path: evidence/recovered.json
+          if-no-files-found: error
+          retention-days: 7
