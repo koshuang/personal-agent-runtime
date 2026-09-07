@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -86,3 +89,45 @@ def test_portability_preserves_ingress_identity(tmp_path: Path) -> None:
     assert recovered["idempotency_key"] == "portable"
     assert recovered["payload"] == {"n": 1}
     assert recovered["authority_is_grant"] is False
+
+
+def _cli(db: Path, *args: str) -> dict:
+    completed = subprocess.run(
+        [sys.executable, "-m", "par", "--db", str(db), *args],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return json.loads(completed.stdout)
+
+
+def test_event_cli_ingest_show_list_round_trip(tmp_path: Path) -> None:
+    db = tmp_path / "runtime.db"
+    event = _cli(
+        db,
+        "event",
+        "ingest",
+        "--idempotency-key",
+        "cli-1",
+        "--source",
+        "human",
+        "--kind",
+        "continue",
+        "--payload",
+        '{"repo":"koshuang/personal-agent-runtime"}',
+        "--requested-action",
+        '{"command":"Continue"}',
+        "--authority",
+        '{"requested_mode":"write"}',
+    )
+    assert event["authority_is_grant"] is False
+
+    shown = _cli(db, "event", "show", event["id"])
+    assert shown["id"] == event["id"]
+    assert shown["requested_action"] == {"command": "Continue"}
+
+    listed = _cli(db, "event", "list")
+    assert [item["id"] for item in listed["events"]] == [event["id"]]
+
+    with connect(db) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0] == 0
