@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
+
+import pytest
 
 from par.commands import resolve_command
 from par.db import claim_task, complete_task, connect, create_task, fail_task, init_db
@@ -31,6 +32,14 @@ def test_chk_is_deterministic_and_zero_mutation(tmp_path: Path) -> None:
     assert _counts(db) == before
 
 
+def test_command_missing_state_fails_without_creating_database(tmp_path: Path) -> None:
+    db = tmp_path / "missing.db"
+    assert not db.exists()
+    with pytest.raises(RuntimeError, match="not initialized"):
+        resolve_command("chk", path=db)
+    assert not db.exists()
+
+
 def test_continue_projects_existing_durable_work_without_mutation(tmp_path: Path) -> None:
     db = tmp_path / "runtime.db"
     init_db(db)
@@ -41,6 +50,33 @@ def test_continue_projects_existing_durable_work_without_mutation(tmp_path: Path
     assert result["next"]["decision"] == "execute"
     assert result["next"]["task_id"] == task["id"]
     assert result["mutated"] is False
+    assert _counts(db) == before
+
+
+def test_continue_review_pending_is_not_misreported_as_idle(tmp_path: Path) -> None:
+    db = tmp_path / "runtime.db"
+    init_db(db)
+    task = create_task(
+        goal="Needs independent review",
+        mode="read-only",
+        context={"requires_independent_review": True},
+        path=db,
+    )
+    claimed = claim_task(task_id=task["id"], worker="worker", path=db)
+    complete_task(
+        task_id=task["id"],
+        run_id=claimed["run_id"],
+        worker="worker",
+        summary="implementation complete",
+        evidence=[{"kind": "test"}],
+        path=db,
+    )
+    before = _counts(db)
+    result = resolve_command("continue", path=db)
+    assert result["decision"] == "next_action_available"
+    assert result["next"]["decision"] == "review"
+    assert result["next"]["finding_type"] == "pending_independent_review"
+    assert result["next"]["task_id"] == task["id"]
     assert _counts(db) == before
 
 
