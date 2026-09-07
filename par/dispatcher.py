@@ -1,12 +1,24 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
-from .db import DEFAULT_DB, connect
+from .db import DEFAULT_DB, connect, now_iso
 from .ingress import get_event, list_events
 from .materialization import materialize_ingress_event
+
+_RECEIVED = "received"
+_MATERIALIZED = "materialized"
+_BLOCKED = "blocked_auto_dispatch"
+_INVALID = "invalid_auto_dispatch"
+
+
+def _set_status(event_id: str, status: str, *, path: Path) -> None:
+    with connect(path) as conn:
+        conn.execute(
+            "UPDATE ingress_events SET status=?, updated_at=? WHERE id=? AND status<>?",
+            (status, now_iso(), event_id, status),
+        )
 
 
 def _already_materialized(event_id: str, *, path: Path) -> bool:
@@ -35,10 +47,12 @@ def dispatch_event(event_id: str, *, path: Path = DEFAULT_DB) -> dict[str, Any]:
     if event is None:
         raise KeyError(f"ingress event not found: {event_id}")
     if _already_materialized(event_id, path=path):
+        _set_status(event_id, _MATERIALIZED, path=path)
         return {"event_id": event_id, "decision": "already_materialized", "task_created": False}
 
     eligible, reason = _dispatchable(event)
     if not eligible:
+        _set_status(event_id, _BLOCKED, path=path)
         return {
             "event_id": event_id,
             "decision": "blocked",
@@ -49,6 +63,7 @@ def dispatch_event(event_id: str, *, path: Path = DEFAULT_DB) -> dict[str, Any]:
     try:
         result = materialize_ingress_event(event_id, path=path)
     except (ValueError, RuntimeError) as exc:
+        _set_status(event_id, _INVALID, path=path)
         return {
             "event_id": event_id,
             "decision": "invalid",
@@ -56,12 +71,14 @@ def dispatch_event(event_id: str, *, path: Path = DEFAULT_DB) -> dict[str, Any]:
             "task_created": False,
         }
     if result.get("decision") != "materialized" or not result.get("task"):
+        _set_status(event_id, _BLOCKED, path=path)
         return {
             "event_id": event_id,
             "decision": "blocked",
             "reason": str(result.get("decision") or "materialization did not create a task"),
             "task_created": False,
         }
+    _set_status(event_id, _MATERIALIZED, path=path)
     return {
         "event_id": event_id,
         "decision": "materialized",
@@ -70,11 +87,32 @@ def dispatch_event(event_id: str, *, path: Path = DEFAULT_DB) -> dict[str, Any]:
     }
 
 
+def _pending_events(*, limit: int, path: Path) -> list[dict[str, Any]]:
+    # Ensure the additive ingress schema exists without inventing a second state store.
+    list_events(limit=1, path=path)
+    with connect(path) as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM ingress_events
+            WHERE status=?
+            ORDER BY created_at ASC, id ASC
+            LIMIT ?
+            """,
+            (_RECEIVED, limit),
+        ).fetchall()
+    events: list[dict[str, Any]] = []
+    for row in rows:
+        event = get_event(row["id"], path=path)
+        if event is not None:
+            events.append(event)
+    return events
+
+
 def dispatch_pending_events(*, limit: int = 100, path: Path = DEFAULT_DB) -> dict[str, Any]:
-    """Process a bounded deterministic batch of durable ingress events."""
+    """Process a bounded deterministic batch of still-received durable ingress events."""
     if limit < 1 or limit > 1000:
         raise ValueError("limit must be between 1 and 1000")
-    events = list_events(limit=limit, path=path)
+    events = _pending_events(limit=limit, path=path)
     results = [dispatch_event(event["id"], path=path) for event in events]
     return {
         "scanned": len(events),
