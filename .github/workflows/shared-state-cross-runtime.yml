@@ -22,7 +22,7 @@ jobs:
           python-version: "3.12"
       - name: Install runtime
         run: python -m pip install -e .
-      - name: Create completed canonical task and export portable state
+      - name: Execute real read-only task and export portable state
         shell: bash
         run: |
           set -euo pipefail
@@ -30,24 +30,30 @@ jobs:
           mkdir -p "$(dirname "$DB")" evidence
           python -m par --db "$DB" init >/dev/null
 
+          REPO_COMMIT=$(git rev-parse HEAD)
+          AGENTS_SHA=$(sha256sum AGENTS.md | awk '{print $1}')
+
           CREATE_JSON=$(python -m par --db "$DB" task create \
-            --goal "Prove independent automation runtime recovery" \
+            --goal "Inspect the checked-out repository commit and AGENTS.md SHA-256, then persist objective read-only evidence." \
             --repo koshuang/personal-agent-runtime \
             --mode read-only \
-            --context '{"source_issue":"#16","pilot":"github-actions-cross-runtime"}')
+            --context '{"source_issue":"#1,#16","pilot":"github-actions-cross-runtime-real-task"}')
           TASK_ID=$(printf '%s' "$CREATE_JSON" | python -c 'import json,sys; print(json.load(sys.stdin)["id"])')
 
           CLAIM_JSON=$(python -m par --db "$DB" task claim "$TASK_ID" --worker producer-runner)
           RUN_ID=$(printf '%s' "$CLAIM_JSON" | python -c 'import json,sys; print(json.load(sys.stdin)["run_id"])')
 
+          EVIDENCE=$(REPO_COMMIT="$REPO_COMMIT" AGENTS_SHA="$AGENTS_SHA" python -c 'import json,os; print(json.dumps(["git-commit:" + os.environ["REPO_COMMIT"], "AGENTS.md-sha256:" + os.environ["AGENTS_SHA"]]))')
+          METADATA=$(REPO_COMMIT="$REPO_COMMIT" AGENTS_SHA="$AGENTS_SHA" python -c 'import json,os; print(json.dumps({"cost_usd":0,"credential_access":False,"target_repo_writes":0,"repository_commit":os.environ["REPO_COMMIT"],"agents_sha256":os.environ["AGENTS_SHA"]}))')
+
           python -m par --db "$DB" task complete "$TASK_ID" \
             --run-id "$RUN_ID" \
             --worker producer-runner \
-            --summary "Producer runner completed the portability pilot." \
-            --evidence '["github-actions://produce-state"]' \
+            --summary "Read-only repository inspection completed with commit and AGENTS.md hash evidence." \
+            --evidence "$EVIDENCE" \
             --blockers '[]' \
-            --next-action "Fresh runner must restore the artifact and recover this state without producer workspace." \
-            --metadata '{"cost_usd":0,"credential_access":false}'
+            --next-action "Fresh runner must restore this state and independently verify the persisted repository evidence." \
+            --metadata "$METADATA"
 
           python -m par --db "$DB" task show "$TASK_ID" > evidence/expected.json
           printf '%s\n' "$TASK_ID" > evidence/task-id.txt
@@ -95,7 +101,9 @@ jobs:
           python -m par --db "$DB" task show "$TASK_ID" > evidence/recovered.json
 
           python - <<'PY'
+          import hashlib
           import json
+          import subprocess
           from pathlib import Path
 
           expected = json.loads(Path("evidence/expected.json").read_text())
@@ -110,11 +118,22 @@ jobs:
           assert [e["id"] for e in recovered["events"]] == [e["id"] for e in expected["events"]]
           assert [a["id"] for a in recovered["artifacts"]] == [a["id"] for a in expected["artifacts"]]
 
-          assert recovered["runs"][-1]["summary"] == "Producer runner completed the portability pilot."
-          assert json.loads(recovered["runs"][-1]["evidence_json"]) == ["github-actions://produce-state"]
-          assert json.loads(recovered["runs"][-1]["blockers_json"]) == []
-          assert json.loads(recovered["runs"][-1]["metadata_json"])["cost_usd"] == 0
-          assert json.loads(recovered["runs"][-1]["metadata_json"])["credential_access"] is False
+          run = recovered["runs"][-1]
+          evidence = json.loads(run["evidence_json"])
+          metadata = json.loads(run["metadata_json"])
+          blockers = json.loads(run["blockers_json"])
+
+          commit = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          agents_sha = hashlib.sha256(Path("AGENTS.md").read_bytes()).hexdigest()
+
+          assert run["summary"] == "Read-only repository inspection completed with commit and AGENTS.md hash evidence."
+          assert evidence == [f"git-commit:{commit}", f"AGENTS.md-sha256:{agents_sha}"]
+          assert blockers == []
+          assert metadata["repository_commit"] == commit
+          assert metadata["agents_sha256"] == agents_sha
+          assert metadata["cost_usd"] == 0
+          assert metadata["credential_access"] is False
+          assert metadata["target_repo_writes"] == 0
           PY
       - name: Upload recovery evidence
         uses: actions/upload-artifact@v4
