@@ -39,6 +39,19 @@ def test_command_chk_cli_is_read_only_and_repeatable(tmp_path: Path) -> None:
     assert _counts(db) == before
 
 
+def test_command_cli_missing_state_fails_without_creating_database(tmp_path: Path) -> None:
+    db = tmp_path / "missing.db"
+    completed = subprocess.run(
+        [sys.executable, "-m", "par", "--db", str(db), "command", "chk"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode != 0
+    assert "not initialized" in completed.stderr
+    assert not db.exists()
+
+
 def test_command_continue_cli_projects_existing_task(tmp_path: Path) -> None:
     db = tmp_path / "runtime.db"
     task = _cli(db, "task", "create", "--goal", "Persisted CLI work")
