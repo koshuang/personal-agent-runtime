@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from par.db import connect, init_db
-from par.dispatcher import dispatch_pending_events
+from par.db import connect, create_task, init_db
+from par.dispatcher import dispatch_event, dispatch_pending_events
 from par.ingress import ingest_event
+from par.materialization import materialize_ingress_event
 from par.portability import export_state, restore_state
 
 
@@ -15,7 +16,10 @@ def _task_count(db: Path) -> int:
 
 def _status(db: Path, event_id: str) -> str:
     with connect(db) as conn:
-        return conn.execute("SELECT status FROM ingress_events WHERE id=?", (event_id,)).fetchone()[0]
+        return conn.execute(
+            "SELECT status FROM ingress_events WHERE id=?",
+            (event_id,),
+        ).fetchone()[0]
 
 
 def _safe_event(db: Path, key: str) -> dict:
@@ -56,7 +60,47 @@ def test_dispatcher_materializes_safe_event_exactly_once(tmp_path: Path) -> None
     assert _task_count(db) == 1
 
 
-def test_dispatcher_blocks_write_like_event_once_without_starving_following_safe_work(tmp_path: Path) -> None:
+def test_dispatcher_reports_reused_matching_task_as_already_materialized(
+    tmp_path: Path,
+) -> None:
+    db = tmp_path / "runtime.db"
+    init_db(db)
+    event = _safe_event(db, "preexisting")
+    materialized = materialize_ingress_event(event["id"], path=db)
+    assert materialized["decision"] == "materialized"
+    assert _status(db, event["id"]) == "received"
+
+    result = dispatch_event(event["id"], path=db)
+
+    assert result["decision"] == "already_materialized"
+    assert result["task_created"] is False
+    assert result["task_id"] == materialized["task"]["id"]
+    assert _status(db, event["id"]) == "materialized"
+    assert _task_count(db) == 1
+
+
+def test_dispatcher_rejects_colliding_preexisting_task(tmp_path: Path) -> None:
+    db = tmp_path / "runtime.db"
+    init_db(db)
+    event = _safe_event(db, "collision")
+    create_task(
+        goal="unrelated task",
+        idempotency_key=f"ingress-event:{event['id']}",
+        path=db,
+    )
+
+    result = dispatch_event(event["id"], path=db)
+
+    assert result["decision"] == "invalid"
+    assert "collided" in result["reason"]
+    assert result["task_created"] is False
+    assert _status(db, event["id"]) == "invalid_auto_dispatch"
+    assert _task_count(db) == 1
+
+
+def test_dispatcher_blocks_write_like_event_once_without_starving_following_safe_work(
+    tmp_path: Path,
+) -> None:
     db = tmp_path / "runtime.db"
     init_db(db)
     blocked_event = ingest_event(
@@ -86,7 +130,10 @@ def test_dispatcher_uses_deterministic_bounded_batch(tmp_path: Path) -> None:
     events = [_safe_event(db, f"safe-{index}") for index in range(3)]
     result = dispatch_pending_events(limit=2, path=db)
     assert result["scanned"] == 2
-    assert [item["event_id"] for item in result["results"]] == [events[0]["id"], events[1]["id"]]
+    assert [item["event_id"] for item in result["results"]] == [
+        events[0]["id"],
+        events[1]["id"],
+    ]
     assert _task_count(db) == 2
     follow_up = dispatch_pending_events(limit=2, path=db)
     assert follow_up["scanned"] == 1
@@ -94,7 +141,9 @@ def test_dispatcher_uses_deterministic_bounded_batch(tmp_path: Path) -> None:
     assert _task_count(db) == 3
 
 
-def test_fresh_runtime_recovers_ingested_but_unmaterialized_event(tmp_path: Path) -> None:
+def test_fresh_runtime_recovers_ingested_but_unmaterialized_event(
+    tmp_path: Path,
+) -> None:
     source = tmp_path / "source.db"
     restored = tmp_path / "restored.db"
     artifact = tmp_path / "state.parstate"
