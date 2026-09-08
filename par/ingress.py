@@ -25,17 +25,17 @@ CREATE TABLE IF NOT EXISTS ingress_events (
 );
 CREATE INDEX IF NOT EXISTS idx_ingress_events_source_created_at
 ON ingress_events(source, created_at);
+CREATE INDEX IF NOT EXISTS idx_ingress_events_status_created_at_id
+ON ingress_events(status, created_at, id);
 """
 
 
 def _ensure_schema(path: Path) -> None:
-    """Create the additive ingress schema when an ingress operation first needs it."""
     with connect(path) as conn:
         conn.executescript(_INGRESS_SCHEMA)
 
 
 def _validate_json_value(value: Any, *, name: str) -> None:
-    """Reject values that Python accepts as JSON extensions but strict consumers cannot read."""
     if isinstance(value, float) and not math.isfinite(value):
         raise ValueError(f"{name} must contain only finite JSON numbers")
     if isinstance(value, dict):
@@ -47,7 +47,6 @@ def _validate_json_value(value: Any, *, name: str) -> None:
 
 
 def _object(value: dict[str, Any] | None, *, name: str) -> dict[str, Any]:
-    """Validate an ingress JSON-object field and return a normalized object value."""
     if value is None:
         return {}
     if not isinstance(value, dict):
@@ -57,10 +56,11 @@ def _object(value: dict[str, Any] | None, *, name: str) -> dict[str, Any]:
 
 
 def _decode(row: Any) -> dict[str, Any]:
-    """Decode one durable ingress row into the provider-neutral read model."""
     result = dict(row)
     result["payload"] = json.loads(result.pop("payload_json") or "{}")
-    result["requested_action"] = json.loads(result.pop("requested_action_json") or "{}")
+    result["requested_action"] = json.loads(
+        result.pop("requested_action_json") or "{}"
+    )
     result["authority"] = json.loads(result.pop("authority_json") or "{}")
     result["authority_is_grant"] = False
     return result
@@ -76,12 +76,12 @@ def ingest_event(
     authority: dict[str, Any] | None = None,
     path: Path = DEFAULT_DB,
 ) -> dict[str, Any]:
-    """Persist one non-authoritative ingress envelope with deterministic idempotency semantics."""
     key = idempotency_key.strip()
     if not key:
         raise ValueError("idempotency_key must be non-empty")
     if source not in SOURCE_VALUES:
         raise ValueError(f"invalid ingress source: {source}")
+
     kind = kind.strip()
     if not kind:
         raise ValueError("kind must be non-empty")
@@ -89,10 +89,15 @@ def ingest_event(
     payload_obj = _object(payload, name="payload")
     action_obj = _object(requested_action, name="requested_action")
     authority_obj = _object(authority, name="authority")
-    dump_options = {"ensure_ascii": False, "sort_keys": True, "separators": (",", ":"), "allow_nan": False}
-    payload_json = json.dumps(payload_obj, **dump_options)
-    action_json = json.dumps(action_obj, **dump_options)
-    authority_json = json.dumps(authority_obj, **dump_options)
+    opts = {
+        "ensure_ascii": False,
+        "sort_keys": True,
+        "separators": (",", ":"),
+        "allow_nan": False,
+    }
+    payload_json = json.dumps(payload_obj, **opts)
+    action_json = json.dumps(action_obj, **opts)
+    authority_json = json.dumps(authority_obj, **opts)
 
     _ensure_schema(path)
     event_id = str(uuid.uuid4())
@@ -101,17 +106,39 @@ def ingest_event(
         cur = conn.execute(
             """
             INSERT OR IGNORE INTO ingress_events
-            (id, idempotency_key, source, kind, payload_json, requested_action_json, authority_json, status, created_at, updated_at)
+            (id, idempotency_key, source, kind, payload_json, requested_action_json,
+             authority_json, status, created_at, updated_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, 'received', ?, ?)
             """,
-            (event_id, key, source, kind, payload_json, action_json, authority_json, ts, ts),
+            (
+                event_id,
+                key,
+                source,
+                kind,
+                payload_json,
+                action_json,
+                authority_json,
+                ts,
+                ts,
+            ),
         )
         if cur.rowcount == 0:
-            row = conn.execute("SELECT * FROM ingress_events WHERE idempotency_key=?", (key,)).fetchone()
+            row = conn.execute(
+                "SELECT * FROM ingress_events WHERE idempotency_key=?",
+                (key,),
+            ).fetchone()
             if not row:
-                raise RuntimeError("idempotent ingress insert was ignored without an existing event")
+                raise RuntimeError(
+                    "idempotent ingress insert was ignored without an existing event"
+                )
             existing = dict(row)
-            expected = (source, kind, payload_json, action_json, authority_json)
+            expected = (
+                source,
+                kind,
+                payload_json,
+                action_json,
+                authority_json,
+            )
             actual = (
                 existing["source"],
                 existing["kind"],
@@ -120,30 +147,62 @@ def ingest_event(
                 existing["authority_json"],
             )
             if actual != expected:
-                raise ValueError("idempotency_key was reused with a different ingress envelope")
+                raise ValueError(
+                    "idempotency_key was reused with a different ingress event"
+                )
             return _decode(row)
-        row = conn.execute("SELECT * FROM ingress_events WHERE id=?", (event_id,)).fetchone()
+
+        row = conn.execute(
+            "SELECT * FROM ingress_events WHERE id=?",
+            (event_id,),
+        ).fetchone()
+
     if not row:
         raise RuntimeError("ingress event was not persisted")
     return _decode(row)
 
 
-def get_event(event_id: str, *, path: Path = DEFAULT_DB) -> dict[str, Any] | None:
-    """Return one ingress event by stable event identity."""
+def get_event(
+    event_id: str,
+    *,
+    path: Path = DEFAULT_DB,
+) -> dict[str, Any] | None:
     _ensure_schema(path)
     with connect(path) as conn:
-        row = conn.execute("SELECT * FROM ingress_events WHERE id=?", (event_id,)).fetchone()
+        row = conn.execute(
+            "SELECT * FROM ingress_events WHERE id=?",
+            (event_id,),
+        ).fetchone()
     return _decode(row) if row else None
 
 
-def list_events(*, limit: int = 100, path: Path = DEFAULT_DB) -> list[dict[str, Any]]:
-    """List ingress events in deterministic creation order with a bounded result size."""
+def list_events(
+    *,
+    source: str | None = None,
+    kind: str | None = None,
+    limit: int = 100,
+    path: Path = DEFAULT_DB,
+) -> list[dict[str, Any]]:
+    if source is not None and source not in SOURCE_VALUES:
+        raise ValueError(f"invalid ingress source: {source}")
     if limit < 1 or limit > 1000:
         raise ValueError("limit must be between 1 and 1000")
+
     _ensure_schema(path)
+    clauses: list[str] = []
+    params: list[Any] = []
+    if source is not None:
+        clauses.append("source=?")
+        params.append(source)
+    if kind is not None:
+        clauses.append("kind=?")
+        params.append(kind)
+
+    where = " WHERE " + " AND ".join(clauses) if clauses else ""
     with connect(path) as conn:
         rows = conn.execute(
-            "SELECT * FROM ingress_events ORDER BY created_at ASC, id ASC LIMIT ?",
-            (limit,),
+            f"SELECT * FROM ingress_events{where} "
+            "ORDER BY created_at ASC, id ASC LIMIT ?",
+            (*params, limit),
         ).fetchall()
     return [_decode(row) for row in rows]

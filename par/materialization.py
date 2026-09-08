@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from .approvals import list_approvals
+from .capabilities import normalize_capabilities
 from .db import DEFAULT_DB, connect, create_task
 from .ingress import get_event
 
@@ -18,6 +19,12 @@ _RUNTIME_OWNED_CONTEXT_KEYS = {
     "approval_id",
     "required_capabilities",
 }
+_READ_ONLY_ACTION_CAPABILITIES = {
+    "inspect_repository": {"repo-read"},
+    "inspect_github_pull_request_state": {"repo-read"},
+}
+_SQLITE_INT_MIN = -(2**63)
+_SQLITE_INT_MAX = 2**63 - 1
 
 
 def _required_string(value: Any, *, name: str) -> str:
@@ -37,20 +44,34 @@ def _object(value: Any, *, name: str) -> dict[str, Any]:
         return {}
     if not isinstance(value, dict):
         raise ValueError(f"{name} must be a JSON object")
-    json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
     return value
 
 
 def _canonical_json(value: Any) -> str:
-    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
 
 
 def _capabilities(value: Any) -> list[str]:
     if value is None:
         return []
-    if not isinstance(value, list) or not all(isinstance(item, str) and item.strip() for item in value):
+    if not isinstance(value, list) or not all(
+        isinstance(item, str) and item.strip() for item in value
+    ):
         raise ValueError("required_capabilities must be a list of non-empty strings")
-    return [item.strip() for item in value]
+    return normalize_capabilities([item.strip() for item in value])
 
 
 def _task_request(event: dict[str, Any]) -> dict[str, Any]:
@@ -61,29 +82,62 @@ def _task_request(event: dict[str, Any]) -> dict[str, Any]:
     action = _required_string(requested.get("action"), name="requested_action.action")
     goal = _required_string(requested.get("goal"), name="requested_action.goal")
     mode = _required_string(requested.get("mode"), name="requested_action.mode")
-    acceptance_criteria = _required_list(requested.get("acceptance_criteria"), name="requested_action.acceptance_criteria")
-    non_goals = _required_list(requested.get("non_goals"), name="requested_action.non_goals")
-    risk_permission_tier = _required_string(requested.get("risk_permission_tier"), name="requested_action.risk_permission_tier")
-    evidence_required = _required_list(requested.get("evidence_required"), name="requested_action.evidence_required")
+    acceptance_criteria = _required_list(
+        requested.get("acceptance_criteria"),
+        name="requested_action.acceptance_criteria",
+    )
+    non_goals = _required_list(
+        requested.get("non_goals"),
+        name="requested_action.non_goals",
+    )
+    risk_permission_tier = _required_string(
+        requested.get("risk_permission_tier"),
+        name="requested_action.risk_permission_tier",
+    )
+    evidence_required = _required_list(
+        requested.get("evidence_required"),
+        name="requested_action.evidence_required",
+    )
     expected_next_state_transition = _required_string(
-        requested.get("expected_next_state_transition"), name="requested_action.expected_next_state_transition"
+        requested.get("expected_next_state_transition"),
+        name="requested_action.expected_next_state_transition",
     )
 
     repo = requested.get("repo")
     if repo is not None:
         repo = _required_string(repo, name="requested_action.repo")
+
     scope = _object(requested.get("scope"), name="requested_action.scope")
     context = _object(requested.get("context"), name="requested_action.context")
     required_capabilities = _capabilities(requested.get("required_capabilities"))
+
     priority = requested.get("priority", 100)
     if isinstance(priority, bool) or not isinstance(priority, int):
         raise ValueError("requested_action.priority must be an integer")
+    if not _SQLITE_INT_MIN <= priority <= _SQLITE_INT_MAX:
+        raise ValueError("requested_action.priority is outside SQLite integer range")
 
-    if mode != "read-only":
+    if mode == "read-only":
+        allowed = _READ_ONLY_ACTION_CAPABILITIES.get(action)
+        if allowed is None:
+            raise ValueError(
+                "requested_action.action is not eligible for automatic read-only execution"
+            )
+        if risk_permission_tier not in {"read-only", "low"}:
+            raise ValueError(
+                "read-only mode requires a read-only/low risk_permission_tier"
+            )
+        if set(required_capabilities) != allowed:
+            raise ValueError(
+                "read-only action capabilities do not match the approved action contract"
+            )
+    else:
         if not scope:
             raise ValueError("non-read-only requested_action.scope must be non-empty")
         if repo is not None and scope.get("repo") != repo:
-            raise ValueError("non-read-only requested_action.scope.repo must exactly match requested_action.repo")
+            raise ValueError(
+                "non-read-only requested_action.scope.repo must exactly match requested_action.repo"
+            )
 
     return {
         "action": action,
@@ -104,19 +158,26 @@ def _task_request(event: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _matching_approval(event_id: str, request: dict[str, Any], *, path: Path) -> dict[str, Any] | None:
-    # Ensure the approval schema exists, then query all relevant rows directly so
-    # a valid approval cannot disappear behind a fixed list/page limit.
+def _matching_approval(
+    event_id: str,
+    request: dict[str, Any],
+    *,
+    path: Path,
+) -> dict[str, Any] | None:
     list_approvals(status="approved", limit=1, path=path)
     with connect(path) as conn:
         rows = conn.execute(
             """
             SELECT * FROM approval_requests
-            WHERE status='approved' AND subject_type='ingress_event' AND subject_id=? AND action=?
+            WHERE status='approved'
+              AND subject_type='ingress_event'
+              AND subject_id=?
+              AND action=?
             ORDER BY created_at ASC, id ASC
             """,
             (event_id, request["action"]),
         ).fetchall()
+
     expected_scope = _canonical_json(request["scope"])
     for row in rows:
         approval = dict(row)
@@ -129,22 +190,49 @@ def _matching_approval(event_id: str, request: dict[str, Any], *, path: Path) ->
 
 
 def _sanitize_context(raw: dict[str, Any]) -> dict[str, Any]:
-    return {key: value for key, value in raw.items() if key not in _RUNTIME_OWNED_CONTEXT_KEYS}
+    return {
+        key: value
+        for key, value in raw.items()
+        if key not in _RUNTIME_OWNED_CONTEXT_KEYS
+    }
 
 
-def _assert_existing_task_matches(task: dict[str, Any], *, request: dict[str, Any], event_id: str, context: dict[str, Any]) -> None:
-    if task.get("goal") != request["goal"] or task.get("repo") != request["repo"] or task.get("mode") != request["mode"]:
-        raise RuntimeError("ingress materialization idempotency key collided with a different task")
+def _assert_existing_task_matches(
+    task: dict[str, Any],
+    *,
+    request: dict[str, Any],
+    event_id: str,
+    context: dict[str, Any],
+) -> None:
+    if (
+        task.get("goal") != request["goal"]
+        or task.get("repo") != request["repo"]
+        or task.get("mode") != request["mode"]
+    ):
+        raise RuntimeError(
+            "ingress materialization idempotency key collided with a different task"
+        )
     if int(task.get("priority", 100)) != request["priority"]:
-        raise RuntimeError("ingress materialization idempotency key collided with a different task")
+        raise RuntimeError(
+            "ingress materialization idempotency key collided with a different task"
+        )
+
     existing_context = json.loads(task.get("context_json") or "{}")
     if _canonical_json(existing_context) != _canonical_json(context):
-        raise RuntimeError("ingress materialization idempotency key collided with a different task")
+        raise RuntimeError(
+            "ingress materialization idempotency key collided with a different task"
+        )
     if existing_context.get("source_ingress_event_id") != event_id:
-        raise RuntimeError("ingress materialization idempotency key is not owned by this event")
+        raise RuntimeError(
+            "ingress materialization idempotency key is not owned by this event"
+        )
 
 
-def materialize_ingress_event(event_id: str, *, path: Path = DEFAULT_DB) -> dict[str, Any]:
+def materialize_ingress_event(
+    event_id: str,
+    *,
+    path: Path = DEFAULT_DB,
+) -> dict[str, Any]:
     event = get_event(event_id, path=path)
     if event is None:
         raise KeyError(f"ingress event not found: {event_id}")
@@ -164,13 +252,17 @@ def materialize_ingress_event(event_id: str, *, path: Path = DEFAULT_DB) -> dict
             }
 
     context = _sanitize_context(request["context"])
-    context["task_contract"] = request["task_contract"]
-    context["source_ingress_event_id"] = event_id
-    context["ingress_source"] = event["source"]
-    context["ingress_kind"] = event["kind"]
-    context["materialization_action"] = request["action"]
-    context["materialization_scope"] = request["scope"]
-    context["required_capabilities"] = request["required_capabilities"]
+    context.update(
+        {
+            "task_contract": request["task_contract"],
+            "source_ingress_event_id": event_id,
+            "ingress_source": event["source"],
+            "ingress_kind": event["kind"],
+            "materialization_action": request["action"],
+            "materialization_scope": request["scope"],
+            "required_capabilities": request["required_capabilities"],
+        }
+    )
     if approval is not None:
         context["approval_id"] = approval["id"]
 
@@ -184,7 +276,12 @@ def materialize_ingress_event(event_id: str, *, path: Path = DEFAULT_DB) -> dict
         actor=f"ingress:{event['source']}",
         path=path,
     )
-    _assert_existing_task_matches(task, request=request, event_id=event_id, context=context)
+    _assert_existing_task_matches(
+        task,
+        request=request,
+        event_id=event_id,
+        context=context,
+    )
     return {
         "decision": "materialized",
         "event_id": event_id,
