@@ -49,57 +49,27 @@ def dispatch_event(event_id: str, *, path: Path = DEFAULT_DB) -> dict[str, Any]:
     if event is None:
         raise KeyError(f"ingress event not found: {event_id}")
     if event["status"] != _RECEIVED:
-        return {
-            "event_id": event_id,
-            "decision": "already_terminal",
-            "status": event["status"],
-            "task_created": False,
-        }
+        return {"event_id": event_id, "decision": "already_terminal", "status": event["status"], "task_created": False}
 
     eligible, reason = _dispatchable(event)
     if not eligible:
         _transition_received(event_id, _BLOCKED, path=path)
-        return {
-            "event_id": event_id,
-            "decision": "blocked",
-            "reason": reason,
-            "task_created": False,
-        }
+        return {"event_id": event_id, "decision": "blocked", "reason": reason, "task_created": False}
 
     task_existed_before = _task_exists(event_id, path=path)
     try:
         result = materialize_ingress_event(event_id, path=path)
     except (ValueError, RuntimeError, OverflowError) as exc:
         _transition_received(event_id, _INVALID, path=path)
-        return {
-            "event_id": event_id,
-            "decision": "invalid",
-            "reason": str(exc),
-            "task_created": False,
-        }
+        return {"event_id": event_id, "decision": "invalid", "reason": str(exc), "task_created": False}
     if result.get("decision") != "materialized" or not result.get("task"):
         _transition_received(event_id, _BLOCKED, path=path)
-        return {
-            "event_id": event_id,
-            "decision": "blocked",
-            "reason": str(result.get("decision") or "materialization did not create a task"),
-            "task_created": False,
-        }
+        return {"event_id": event_id, "decision": "blocked", "reason": str(result.get("decision") or "materialization did not create a task"), "task_created": False}
 
     transitioned = _transition_received(event_id, _MATERIALIZED, path=path)
     if task_existed_before or not transitioned:
-        return {
-            "event_id": event_id,
-            "decision": "already_materialized",
-            "task_created": False,
-            "task_id": result["task"]["id"],
-        }
-    return {
-        "event_id": event_id,
-        "decision": "materialized",
-        "task_created": True,
-        "task_id": result["task"]["id"],
-    }
+        return {"event_id": event_id, "decision": "already_materialized", "task_created": False, "task_id": result["task"]["id"]}
+    return {"event_id": event_id, "decision": "materialized", "task_created": True, "task_id": result["task"]["id"]}
 
 
 def _pending_events(*, limit: int, path: Path) -> list[dict[str, Any]]:
@@ -107,12 +77,7 @@ def _pending_events(*, limit: int, path: Path) -> list[dict[str, Any]]:
     list_events(limit=1, path=path)
     with connect(path) as conn:
         rows = conn.execute(
-            """
-            SELECT * FROM ingress_events
-            WHERE status=?
-            ORDER BY created_at ASC, id ASC
-            LIMIT ?
-            """,
+            "SELECT * FROM ingress_events WHERE status=? ORDER BY created_at ASC, id ASC LIMIT ?",
             (_RECEIVED, limit),
         ).fetchall()
     events: list[dict[str, Any]] = []
@@ -121,6 +86,12 @@ def _pending_events(*, limit: int, path: Path) -> list[dict[str, Any]]:
         if event is not None:
             events.append(event)
     return events
+
+
+def _has_pending_events(*, path: Path) -> bool:
+    with connect(path) as conn:
+        row = conn.execute("SELECT 1 FROM ingress_events WHERE status=? LIMIT 1", (_RECEIVED,)).fetchone()
+    return row is not None
 
 
 def dispatch_pending_events(*, limit: int = 100, path: Path = DEFAULT_DB) -> dict[str, Any]:
@@ -132,11 +103,8 @@ def dispatch_pending_events(*, limit: int = 100, path: Path = DEFAULT_DB) -> dic
     return {
         "scanned": len(events),
         "materialized": sum(1 for result in results if result["decision"] == "materialized"),
-        "already_materialized": sum(
-            1 for result in results if result["decision"] == "already_materialized"
-        ),
-        "blocked": sum(
-            1 for result in results if result["decision"] in {"blocked", "invalid"}
-        ),
+        "already_materialized": sum(1 for result in results if result["decision"] == "already_materialized"),
+        "blocked": sum(1 for result in results if result["decision"] in {"blocked", "invalid"}),
+        "has_more": _has_pending_events(path=path),
         "results": results,
     }
