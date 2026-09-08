@@ -18,11 +18,13 @@ def watchdog_wake(
     """Run one bounded recovery wake without claiming or executing work."""
     dispatch = dispatch_pending_events(limit=dispatch_limit, path=path)
     reconciliation = reconcile(path=path)
-    scheduler = decide(worker=worker, path=path)
+    scheduler = decide(worker=worker, path=path, reconciliation=reconciliation)
+    runtime_state_mutated = dispatch["scanned"] > 0
+    has_next_action = scheduler.get("decision") != "idle" or dispatch.get("has_more", False)
     return {
-        "decision": "idle" if scheduler.get("decision") == "idle" else "next_action_available",
-        "read_only": True,
-        "mutated_execution_state": False,
+        "decision": "next_action_available" if has_next_action else "idle",
+        "target_system_read_only": True,
+        "runtime_state_mutated": runtime_state_mutated,
         "dispatch": dispatch,
         "reconciliation": reconciliation,
         "scheduler": scheduler,
