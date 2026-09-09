@@ -56,6 +56,7 @@ def test_watchdog_wake_cli_materializes_missed_safe_ingress_and_projects_it(tmp_
         requested_action=_safe_requested_action(),
         path=db,
     )
+    _cli(db, "worker", "declare", "--worker", "watchdog-test", "--capability", "repo-read")
 
     result = _cli(db, "watchdog", "wake", "--dispatch-limit", "1", "--worker", "watchdog-test")
 
