@@ -17,6 +17,7 @@ from .portability import export_state, restore_state
 from .reconcile import reconcile
 from .review import submit_review
 from .scheduler import decide
+from .watchdog import watchdog_wake
 
 
 def dump(value):
@@ -67,6 +68,12 @@ def parser() -> argparse.ArgumentParser:
     dispatch_sub = dispatch.add_subparsers(dest="dispatch_command", required=True)
     dispatch_pending = dispatch_sub.add_parser("pending")
     dispatch_pending.add_argument("--limit", type=int, default=100)
+
+    watchdog = sub.add_parser("watchdog")
+    watchdog_sub = watchdog.add_subparsers(dest="watchdog_command", required=True)
+    watchdog_wake_parser = watchdog_sub.add_parser("wake")
+    watchdog_wake_parser.add_argument("--dispatch-limit", type=int, default=100)
+    watchdog_wake_parser.add_argument("--worker")
 
     event = sub.add_parser("event")
     event_sub = event.add_subparsers(dest="event_command", required=True)
@@ -248,6 +255,12 @@ def main() -> None:
         init_db(path)
         if args.dispatch_command == "pending":
             dump(dispatch_pending_events(limit=args.limit, path=path))
+        return
+
+    if args.command == "watchdog":
+        init_db(path)
+        if args.watchdog_command == "wake":
+            dump(watchdog_wake(dispatch_limit=args.dispatch_limit, worker=args.worker, path=path))
         return
 
     if args.command == "event":
