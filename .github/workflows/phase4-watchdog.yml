@@ -1,6 +1,9 @@
 name: Phase 4 watchdog
 
 on:
+  workflow_run:
+    workflows: ["Phase 4 runtime event ingress"]
+    types: [completed]
   schedule:
     - cron: '17 * * * *'
   workflow_dispatch:
@@ -18,22 +21,58 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
 
-      - name: Restore latest portable runtime state
+      - name: Restore canonical portable runtime state
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
           mkdir -p .par .phase4-state
           artifact_url="$(gh api --method GET "repos/${GITHUB_REPOSITORY}/actions/artifacts?name=phase4-runtime-state&per_page=1" --jq '.artifacts[0].archive_download_url // empty')"
           if [ -n "$artifact_url" ]; then
             gh api "$artifact_url" > /tmp/phase4-state.zip
             unzip -q /tmp/phase4-state.zip -d .phase4-state
-            if [ -f .phase4-state/runtime.parstate ]; then
-              python -m par --db .par/runtime.db state restore .phase4-state/runtime.parstate
-            fi
+            test -f .phase4-state/runtime.parstate
+            python -m par --db .par/runtime.db state restore .phase4-state/runtime.parstate
           else
+            prior_runs="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/phase4-watchdog.yml/runs?status=completed&per_page=1" --jq '.total_count')"
+            if [ "$prior_runs" -gt 0 ]; then
+              echo "Canonical runtime state is missing after prior watchdog history; refusing destructive reinitialization." >&2
+              exit 1
+            fi
             python -m par --db .par/runtime.db init
           fi
+
+      - name: Replay durable GitHub deliveries
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/artifacts?per_page=100" \
+            --jq '.artifacts[] | select(.name | startswith("phase4-delivery-")) | [.id, .name, .archive_download_url] | @tsv' \
+            | sort -n -k1,1 > /tmp/phase4-deliveries.tsv
+          while IFS=$'\t' read -r artifact_id artifact_name artifact_url; do
+            [ -n "${artifact_id:-}" ] || continue
+            case "$artifact_name" in
+              phase4-delivery-pull_request_review-*) event_name=pull_request_review ;;
+              phase4-delivery-pull_request-*) event_name=pull_request ;;
+              phase4-delivery-check_run-*) event_name=check_run ;;
+              *) echo "Unsupported delivery artifact: $artifact_name" >&2; exit 1 ;;
+            esac
+            workdir="/tmp/phase4-delivery-${artifact_id}"
+            mkdir -p "$workdir"
+            gh api "$artifact_url" > "$workdir/delivery.zip"
+            unzip -q "$workdir/delivery.zip" -d "$workdir/payload"
+            event_path="$(find "$workdir/payload" -type f -print -quit)"
+            test -n "$event_path"
+            python scripts/ingest_github_action_event.py \
+              --event-name "$event_name" \
+              --event-path "$event_path" \
+              --db .par/runtime.db
+          done < /tmp/phase4-deliveries.tsv
 
       - name: Run bounded watchdog reconciliation
         run: python -m par --db .par/runtime.db watchdog wake --dispatch-limit 100
@@ -46,4 +85,4 @@ jobs:
         with:
           name: phase4-runtime-state
           path: runtime.parstate
-          retention-days: 7
+          retention-days: 90
