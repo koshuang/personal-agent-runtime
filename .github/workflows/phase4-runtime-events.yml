@@ -1,0 +1,55 @@
+name: Phase 4 runtime event ingress
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
+  pull_request_review:
+    types: [submitted, edited, dismissed]
+  check_run:
+    types: [completed]
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: phase4-runtime-state
+  cancel-in-progress: false
+
+jobs:
+  ingest:
+    if: github.event_name != 'check_run' || github.event.check_run.pull_requests[0] != null
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore latest portable runtime state
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p .par .phase4-state
+          artifact_url="$(gh api --method GET "repos/${GITHUB_REPOSITORY}/actions/artifacts?name=phase4-runtime-state&per_page=1" --jq '.artifacts[0].archive_download_url // empty')"
+          if [ -n "$artifact_url" ]; then
+            gh api "$artifact_url" > /tmp/phase4-state.zip
+            unzip -q /tmp/phase4-state.zip -d .phase4-state
+            if [ -f .phase4-state/runtime.parstate ]; then
+              python -m par --db .par/runtime.db state restore .phase4-state/runtime.parstate
+            fi
+          fi
+
+      - name: Ingest bounded GitHub event
+        run: |
+          python scripts/ingest_github_action_event.py \
+            --event-name "$GITHUB_EVENT_NAME" \
+            --event-path "$GITHUB_EVENT_PATH" \
+            --db .par/runtime.db
+
+      - name: Export portable runtime state
+        run: python -m par --db .par/runtime.db state export runtime.parstate
+
+      - name: Persist portable runtime state
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase4-runtime-state
+          path: runtime.parstate
+          retention-days: 7
