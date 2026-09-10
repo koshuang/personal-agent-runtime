@@ -68,23 +68,34 @@ Issue #14 remote MCP stable-HTTPS / ChatGPT Developer Mode verification remains 
 
 ## Phase 4 — Event-driven Runtime
 
-Status: **active**
+Status: **complete**
 
-Target capabilities:
+### Definition of Done
 
-- GitHub events trigger relevant tasks directly;
-- hourly schedule becomes watchdog/reconciliation rather than primary driver;
-- missed events and stale states can self-heal.
+- [x] A bounded GitHub event adapter normalizes trusted transport events into the existing provider-neutral durable ingress without adding execution authority. Evidence: Issue #67 + PR #68.
+- [x] Delivery replay is idempotent and conflicting/malformed/unsupported events fail closed. Evidence: Issue #67 + PR #68.
+- [x] Pending safe ingress can be dispatched exactly once, and a fresh runtime can recover an event stranded after ingest without duplicating work. Evidence: Issue #69 + PR #70.
+- [x] Event consumer and watchdog share the same bounded dispatcher contract rather than maintaining parallel task authority. Evidence: Issue #69 + PR #70.
+- [x] A bounded watchdog wake performs `dispatch pending → reconcile → scheduler projection`, remains non-executing, and returns idle without manufacturing backlog when there is no work. Evidence: Issue #71 + PR #72/#73.
+- [x] Portable-state recovery and canonical CI evidence cover the event ingress, dispatcher, and watchdog paths.
 
-Current direction: define the smallest provider-neutral event-dispatch contract first, then prove one bounded GitHub event path end to end. Preserve the existing ingress, approval, idempotency, capability, review, cost, and credential boundaries; do not introduce arbitrary shell/network execution or production automation as part of this phase transition.
+### Exit evidence
+
+Phase 4 exit evidence is complete. PR #68 established the first bounded GitHub event path into durable ingress; PR #70 made event-to-task dispatch deterministic, idempotent, race-safe, and recoverable after an ingest/consumer interruption; PR #72/#73 exposed one bounded watchdog wake so hourly scheduling heals missed ingress and stale durable state instead of becoming a second orchestration authority. Existing approval, capability, review, cost, and credential boundaries remain authoritative downstream, and the phase introduced no arbitrary shell/network execution or production automation.
+
+Issue #14 remains an independent stable-HTTPS / credential / ChatGPT Developer Mode human gate and is not implied complete by Phase 4 closure.
 
 ## Phase 5 — Supervisor Adapters
+
+Status: **active**
 
 Only after the runtime is reliable:
 
 - Hermes / other orchestrators interact through runtime contracts;
 - supervisors do not receive ambient company credentials;
 - supervisor replacement does not require changing Shared State semantics.
+
+Current direction: define the smallest supervisor-adapter contract around existing runtime APIs and durable state before choosing a concrete supervisor integration. The first slice must preserve zero additional API spend by default, avoid ambient company credentials, and prove that replacing the supervisor does not change task/state semantics. Do not add production automation or broad credential access as part of Phase 5 activation.
 
 ## Explicitly deferred
 
