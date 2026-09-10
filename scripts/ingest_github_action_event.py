@@ -33,15 +33,19 @@ def _event_identities(event_name: str, payload: dict[str, Any]) -> list[tuple[st
     if event_name in {"pull_request", "pull_request_review"}:
         pull_request = _object(payload.get("pull_request"), name="pull_request")
         number = _positive_int(pull_request.get("number"), name="pull_request.number")
+        action = payload.get("action")
+        if not isinstance(action, str) or not action.strip():
+            raise ValueError("action must be a non-empty string")
+        action = action.strip()
         if event_name == "pull_request_review":
             review = _object(payload.get("review"), name="review")
-            stable = f"review:{_positive_int(review.get('id'), name='review.id')}"
+            stable = f"review:{_positive_int(review.get('id'), name='review.id')}:action:{action}"
         else:
             head = _object(pull_request.get("head"), name="pull_request.head")
             sha = head.get("sha")
             if not isinstance(sha, str) or not sha.strip():
                 raise ValueError("pull_request.head.sha must be a non-empty string")
-            stable = f"head:{sha.strip()}:action:{payload.get('action', '')}"
+            stable = f"head:{sha.strip()}:action:{action}"
         return [(repository, number, stable)]
 
     if event_name == "check_run":
