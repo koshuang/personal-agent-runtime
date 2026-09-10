@@ -45,6 +45,10 @@ def _event_identities(event_name: str, payload: dict[str, Any]) -> list[tuple[st
         return [(repository, number, stable)]
 
     if event_name == "check_run":
+        action = payload.get("action")
+        if not isinstance(action, str) or not action.strip():
+            raise ValueError("action must be a non-empty string")
+        action = action.strip()
         check_run = _object(payload.get("check_run"), name="check_run")
         pull_requests = check_run.get("pull_requests")
         if not isinstance(pull_requests, list) or not pull_requests:
@@ -60,7 +64,7 @@ def _event_identities(event_name: str, payload: dict[str, Any]) -> list[tuple[st
             if number in seen:
                 continue
             seen.add(number)
-            identities.append((repository, number, f"check:{check_id}:pr:{number}"))
+            identities.append((repository, number, f"check:{check_id}:action:{action}:pr:{number}"))
         return identities
 
     raise ValueError(f"unsupported GitHub event: {event_name}")
