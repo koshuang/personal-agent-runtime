@@ -20,6 +20,6 @@ jobs:
       - name: Persist immutable GitHub delivery before reconciliation
         uses: actions/upload-artifact@v4
         with:
-          name: phase4-delivery-${{ github.run_id }}-${{ github.run_attempt }}
+          name: phase4-delivery-${{ github.event_name }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ github.event_path }}
           retention-days: 90
