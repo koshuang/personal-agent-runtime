@@ -31,7 +31,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p .par .phase4-state
-          artifact_url="$(gh api --method GET "repos/${GITHUB_REPOSITORY}/actions/artifacts?name=phase4-runtime-state&per_page=1" --jq '.artifacts[0].archive_download_url // empty')"
+          artifact_url="$(gh api --method GET "repos/${GITHUB_REPOSITORY}/actions/artifacts?name=phase4-runtime-state&per_page=100" --jq '[.artifacts[] | select(.expired | not) | .archive_download_url][0] // empty')"
           if [ -n "$artifact_url" ]; then
             gh api "$artifact_url" > /tmp/phase4-state.zip
             unzip -q /tmp/phase4-state.zip -d .phase4-state
@@ -52,7 +52,7 @@ jobs:
         run: |
           set -euo pipefail
           gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/artifacts?per_page=100" \
-            --jq '.artifacts[] | select(.name | startswith("phase4-delivery-")) | [.id, .name, .archive_download_url] | @tsv' \
+            --jq '.artifacts[] | select((.expired | not) and (.name | startswith("phase4-delivery-"))) | [.id, .name, .archive_download_url] | @tsv' \
             | sort -n -k1,1 > /tmp/phase4-deliveries.tsv
           while IFS=$'\t' read -r artifact_id artifact_name artifact_url; do
             [ -n "${artifact_id:-}" ] || continue
@@ -68,7 +68,7 @@ jobs:
             unzip -q "$workdir/delivery.zip" -d "$workdir/payload"
             event_path="$(find "$workdir/payload" -type f -print -quit)"
             test -n "$event_path"
-            python scripts/ingest_github_action_event.py \
+            PYTHONPATH="$GITHUB_WORKSPACE${PYTHONPATH:+:$PYTHONPATH}" python scripts/ingest_github_action_event.py \
               --event-name "$event_name" \
               --event-path "$event_path" \
               --db .par/runtime.db
