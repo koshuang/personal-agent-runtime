@@ -42,6 +42,25 @@ def test_supported_github_event_normalizes_and_materializes_one_read_only_task(t
     assert _counts(db) == (1, 1)
 
 
+def test_workflow_run_normalizes_to_same_bounded_read_only_contract(tmp_path: Path) -> None:
+    db = tmp_path / "runtime.db"
+    init_db(db)
+    event = ingest_github_pr_event(
+        event_name="workflow_run",
+        delivery_id="delivery-workflow-run",
+        repository="koshuang/personal-agent-runtime",
+        pull_request_number=78,
+        payload={"action": "completed"},
+        path=db,
+    )
+    assert event["kind"] == "github.workflow_run"
+    assert event["authority_is_grant"] is False
+    result = materialize_ingress_event(event["id"], path=db)
+    assert result["decision"] == "materialized"
+    assert result["task"]["mode"] == "read-only"
+    assert _counts(db) == (1, 1)
+
+
 def test_replayed_delivery_is_idempotent_for_event_and_task(tmp_path: Path) -> None:
     db = tmp_path / "runtime.db"
     init_db(db)
