@@ -38,9 +38,9 @@ jobs:
             test -f .phase4-state/runtime.parstate
             python -m par --db .par/runtime.db state restore .phase4-state/runtime.parstate
           else
-            prior_runs="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/phase4-watchdog.yml/runs?status=completed&per_page=1" --jq '.total_count')"
-            if [ "$prior_runs" -gt 0 ]; then
-              echo "Canonical runtime state is missing after prior watchdog history; refusing destructive reinitialization." >&2
+            successful_runs="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/phase4-watchdog.yml/runs?status=success&per_page=1" --jq '.total_count')"
+            if [ "$successful_runs" -gt 0 ]; then
+              echo "Canonical runtime state is missing after a successful watchdog run; refusing destructive reinitialization." >&2
               exit 1
             fi
             python -m par --db .par/runtime.db init
