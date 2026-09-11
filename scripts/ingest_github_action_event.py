@@ -23,8 +23,24 @@ def _positive_int(value: Any, *, name: str) -> int:
     return value
 
 
+def _linked_pull_requests(value: Any, *, name: str) -> list[int]:
+    if not isinstance(value, list) or not value:
+        raise ValueError(f"{name} must contain at least one pull request")
+    numbers: list[int] = []
+    seen: set[int] = set()
+    for index, item in enumerate(value):
+        number = _positive_int(
+            _object(item, name=f"{name}[{index}]").get("number"),
+            name="pull_request.number",
+        )
+        if number not in seen:
+            seen.add(number)
+            numbers.append(number)
+    return numbers
+
+
 def _event_identities(event_name: str, payload: dict[str, Any]) -> list[tuple[str, int, str]]:
-    """Derive stable per-PR identities for one supported GitHub Actions event."""
+    """Derive semantic per-PR metadata for one supported GitHub Actions event."""
     repository = _object(payload.get("repository"), name="repository").get("full_name")
     if not isinstance(repository, str) or not repository.strip():
         raise ValueError("repository.full_name must be a non-empty string")
@@ -49,36 +65,26 @@ def _event_identities(event_name: str, payload: dict[str, Any]) -> list[tuple[st
         return [(repository, number, stable)]
 
     if event_name == "check_run":
-        action = payload.get("action")
-        if not isinstance(action, str) or not action.strip():
-            raise ValueError("action must be a non-empty string")
-        action = action.strip()
         check_run = _object(payload.get("check_run"), name="check_run")
-        pull_requests = check_run.get("pull_requests")
-        if not isinstance(pull_requests, list) or not pull_requests:
-            raise ValueError("check_run.pull_requests must contain at least one pull request")
         check_id = _positive_int(check_run.get("id"), name="check_run.id")
-        identities: list[tuple[str, int, str]] = []
-        seen: set[int] = set()
-        for index, item in enumerate(pull_requests):
-            number = _positive_int(
-                _object(item, name=f"check_run.pull_requests[{index}]").get("number"),
-                name="pull_request.number",
-            )
-            if number in seen:
-                continue
-            seen.add(number)
-            identities.append((repository, number, f"check:{check_id}:action:{action}:pr:{number}"))
-        return identities
+        numbers = _linked_pull_requests(check_run.get("pull_requests"), name="check_run.pull_requests")
+        return [(repository, number, f"check:{check_id}:pr:{number}") for number in numbers]
+
+    if event_name == "workflow_run":
+        workflow_run = _object(payload.get("workflow_run"), name="workflow_run")
+        run_id = _positive_int(workflow_run.get("id"), name="workflow_run.id")
+        numbers = _linked_pull_requests(workflow_run.get("pull_requests"), name="workflow_run.pull_requests")
+        return [(repository, number, f"workflow-run:{run_id}:pr:{number}") for number in numbers]
 
     raise ValueError(f"unsupported GitHub event: {event_name}")
 
 
 def main() -> None:
-    """Ingest one Actions payload into durable runtime ingress records."""
+    """Ingest one immutable Actions delivery into durable runtime ingress records."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--event-name", required=True)
     parser.add_argument("--event-path", type=Path, required=True)
+    parser.add_argument("--delivery-id", required=True)
     parser.add_argument("--db", type=Path, default=Path(".par/runtime.db"))
     args = parser.parse_args()
 
@@ -88,8 +94,8 @@ def main() -> None:
 
     init_db(args.db)
     results = []
-    for repository, pull_request_number, stable in identities:
-        delivery_id = f"actions:{args.event_name}:{repository}:{pull_request_number}:{stable}"
+    for repository, pull_request_number, semantic_identity in identities:
+        delivery_id = f"actions:{args.delivery_id}:pr:{pull_request_number}"
         event = ingest_github_pr_event(
             event_name=args.event_name,
             delivery_id=delivery_id,
@@ -98,7 +104,14 @@ def main() -> None:
             payload=payload,
             path=args.db,
         )
-        results.append({"event_id": event["id"], "delivery_id": delivery_id, "status": event["status"]})
+        results.append(
+            {
+                "event_id": event["id"],
+                "delivery_id": delivery_id,
+                "semantic_identity": semantic_identity,
+                "status": event["status"],
+            }
+        )
     print(json.dumps({"events": results}, sort_keys=True))
 
 
