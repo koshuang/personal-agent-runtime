@@ -56,11 +56,13 @@ jobs:
             | sort -n -k1,1 > /tmp/phase4-deliveries.tsv
           while IFS=$'\t' read -r artifact_id artifact_name artifact_url; do
             [ -n "${artifact_id:-}" ] || continue
+            event_name=''
             case "$artifact_name" in
               phase4-delivery-pull_request_review-*) event_name=pull_request_review ;;
               phase4-delivery-pull_request-*) event_name=pull_request ;;
               phase4-delivery-check_run-*) event_name=check_run ;;
               phase4-delivery-workflow_run-*) event_name=workflow_run ;;
+              phase4-delivery-[0-9]*-[0-9]*) ;;
               *) echo "Unsupported delivery artifact: $artifact_name" >&2; exit 1 ;;
             esac
             workdir="/tmp/phase4-delivery-${artifact_id}"
@@ -69,6 +71,26 @@ jobs:
             unzip -q "$workdir/delivery.zip" -d "$workdir/payload"
             event_path="$(find "$workdir/payload" -type f -print -quit)"
             test -n "$event_path"
+            if [ -z "$event_name" ]; then
+              event_name="$(python - "$event_path" <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as handle:
+              payload = json.load(handle)
+          if "review" in payload and "pull_request" in payload:
+              print("pull_request_review")
+          elif "pull_request" in payload:
+              print("pull_request")
+          elif "check_run" in payload:
+              print("check_run")
+          elif "workflow_run" in payload:
+              print("workflow_run")
+          else:
+              raise SystemExit("Unsupported legacy delivery payload")
+          PY
+              )"
+            fi
             PYTHONPATH="$GITHUB_WORKSPACE${PYTHONPATH:+:$PYTHONPATH}" python scripts/ingest_github_action_event.py \
               --event-name "$event_name" \
               --event-path "$event_path" \
