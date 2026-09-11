@@ -6,7 +6,7 @@ from typing import Any
 from .db import DEFAULT_DB
 from .ingress import ingest_event
 
-_SUPPORTED_EVENTS = {"pull_request", "pull_request_review", "check_run"}
+_SUPPORTED_EVENTS = {"pull_request", "pull_request_review", "check_run", "workflow_run"}
 
 
 def _required_string(value: Any, *, name: str) -> str:
