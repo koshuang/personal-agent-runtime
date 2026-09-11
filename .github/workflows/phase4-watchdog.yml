@@ -62,7 +62,10 @@ jobs:
               phase4-delivery-pull_request-*) event_name=pull_request ;;
               phase4-delivery-check_run-*) event_name=check_run ;;
               phase4-delivery-workflow_run-*) event_name=workflow_run ;;
-              phase4-delivery-[0-9]*-[0-9]*) ;;
+              phase4-delivery-*)
+                [[ "$artifact_name" =~ ^phase4-delivery-[0-9]+-[0-9]+$ ]] ||
+                  { echo "Unsupported delivery artifact: $artifact_name" >&2; exit 1; }
+                ;;
               *) echo "Unsupported delivery artifact: $artifact_name" >&2; exit 1 ;;
             esac
             workdir="/tmp/phase4-delivery-${artifact_id}"
