@@ -68,23 +68,25 @@ Issue #14 remote MCP stable-HTTPS / ChatGPT Developer Mode verification remains 
 
 ## Phase 4 — Event-driven Runtime
 
+Status: **complete**
+
+### Exit evidence
+
+Phase 4 is complete. Repository-owned GitHub workflow events now enter the bounded durable ingress path, delivery replay is idempotent and fails closed for malformed or unsupported input, and the hourly watchdog performs bounded dispatch/reconciliation rather than claiming or executing arbitrary work. Issue #74 and PRs #76–#79 hardened recovery across historical artifacts and event types. After PR #79 merged, the real `Phase 4 watchdog` run #17 succeeded on `main` (`b66c485`), providing objective post-merge evidence that missed-event recovery and reconciliation can self-heal without expanding credentials, production authority, or paid API spend.
+
+Issue #14 remote MCP stable-HTTPS / ChatGPT Developer Mode verification remains a separate human-only boundary and is not implicitly completed by this phase transition.
+
+## Phase 5 — Supervisor Adapters
+
 Status: **active**
 
 Target capabilities:
 
-- GitHub events trigger relevant tasks directly;
-- hourly schedule becomes watchdog/reconciliation rather than primary driver;
-- missed events and stale states can self-heal.
-
-Current direction: define the smallest provider-neutral event-dispatch contract first, then prove one bounded GitHub event path end to end. Preserve the existing ingress, approval, idempotency, capability, review, cost, and credential boundaries; do not introduce arbitrary shell/network execution or production automation as part of this phase transition.
-
-## Phase 5 — Supervisor Adapters
-
-Only after the runtime is reliable:
-
 - Hermes / other orchestrators interact through runtime contracts;
 - supervisors do not receive ambient company credentials;
 - supervisor replacement does not require changing Shared State semantics.
+
+Current direction: define the smallest provider-neutral supervisor adapter contract and prove one bounded adapter path without changing Shared State semantics or expanding credential/cost authority.
 
 ## Explicitly deferred
 
