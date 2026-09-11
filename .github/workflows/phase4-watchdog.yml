@@ -60,6 +60,7 @@ jobs:
               phase4-delivery-pull_request_review-*) event_name=pull_request_review ;;
               phase4-delivery-pull_request-*) event_name=pull_request ;;
               phase4-delivery-check_run-*) event_name=check_run ;;
+              phase4-delivery-workflow_run-*) event_name=workflow_run ;;
               *) echo "Unsupported delivery artifact: $artifact_name" >&2; exit 1 ;;
             esac
             workdir="/tmp/phase4-delivery-${artifact_id}"
@@ -71,6 +72,7 @@ jobs:
             PYTHONPATH="$GITHUB_WORKSPACE${PYTHONPATH:+:$PYTHONPATH}" python scripts/ingest_github_action_event.py \
               --event-name "$event_name" \
               --event-path "$event_path" \
+              --delivery-id "artifact:${artifact_id}" \
               --db .par/runtime.db
           done < /tmp/phase4-deliveries.tsv
 
