@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Mapping as MappingABC
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any, Mapping
 
 from .ingress import ingest_event
@@ -9,11 +11,29 @@ from .ingress import ingest_event
 SUPPORTED_INTENTS = {"observe", "request_action"}
 
 
+def _freeze(value: Any) -> Any:
+    """Recursively detach and freeze JSON-like supervisor values."""
+    if isinstance(value, MappingABC):
+        return MappingProxyType({key: _freeze(item) for key, item in value.items()})
+    if isinstance(value, list):
+        return tuple(_freeze(item) for item in value)
+    return value
+
+
+def _thaw(value: Any) -> Any:
+    """Return an isolated mutable copy for the durable ingress boundary."""
+    if isinstance(value, MappingABC):
+        return {key: _thaw(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_thaw(item) for item in value]
+    return value
+
+
 @dataclass(frozen=True)
 class SupervisorIntent:
     kind: str
-    payload: dict[str, Any]
-    requested_action: dict[str, Any]
+    payload: Mapping[str, Any]
+    requested_action: Mapping[str, Any]
 
 
 def adapt_supervisor_intent(
@@ -53,8 +73,8 @@ def adapt_supervisor_intent(
 
     return SupervisorIntent(
         kind=kind,
-        payload=dict(payload),
-        requested_action=dict(requested_action),
+        payload=_freeze(payload),
+        requested_action=_freeze(requested_action),
     )
 
 
@@ -74,8 +94,8 @@ def submit_supervisor_intent(
         idempotency_key=idempotency_key,
         source="api",
         kind=f"supervisor.{normalized.kind}",
-        payload=normalized.payload,
-        requested_action=normalized.requested_action,
+        payload=_thaw(normalized.payload),
+        requested_action=_thaw(normalized.requested_action),
         authority={},
         path=path,
     )
