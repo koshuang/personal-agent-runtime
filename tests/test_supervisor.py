@@ -19,6 +19,26 @@ def test_provider_replacement_produces_equivalent_bounded_intent():
     assert hermes == other
 
 
+def test_normalized_intent_is_deeply_immutable_and_detached():
+    proposal = {
+        "kind": "request_action",
+        "payload": {"context": {"tags": ["safe"]}},
+        "requested_action": {"action": "continue", "metadata": {"mode": "bounded"}},
+    }
+    normalized = adapt_supervisor_intent(supervisor_id="fixture", intent=proposal)
+
+    with pytest.raises(TypeError):
+        normalized.payload["new"] = "value"
+    with pytest.raises(TypeError):
+        normalized.payload["context"]["new"] = "value"
+
+    proposal["payload"]["context"]["tags"].append("mutated")
+    proposal["requested_action"]["metadata"]["mode"] = "unbounded"
+
+    assert normalized.payload["context"]["tags"] == ("safe",)
+    assert normalized.requested_action["metadata"]["mode"] == "bounded"
+
+
 def test_write_like_intent_uses_durable_ingress_without_authority(tmp_path: Path):
     db = tmp_path / "runtime.db"
     event = submit_supervisor_intent(
