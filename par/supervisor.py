@@ -15,7 +15,7 @@ def _freeze(value: Any) -> Any:
     """Recursively detach and freeze JSON-like supervisor values."""
     if isinstance(value, MappingABC):
         return MappingProxyType({key: _freeze(item) for key, item in value.items()})
-    if isinstance(value, list):
+    if isinstance(value, (list, tuple)):
         return tuple(_freeze(item) for item in value)
     return value
 
