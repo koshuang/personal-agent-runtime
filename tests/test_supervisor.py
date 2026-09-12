@@ -39,6 +39,30 @@ def test_normalized_intent_is_deeply_immutable_and_detached():
     assert normalized.requested_action["metadata"]["mode"] == "bounded"
 
 
+def test_tuple_values_are_recursively_detached_before_persistence(tmp_path: Path):
+    nested = {"state": "safe"}
+    proposal = {
+        "kind": "observe",
+        "payload": {"items": (nested,)},
+    }
+
+    normalized = adapt_supervisor_intent(supervisor_id="fixture", intent=proposal)
+    nested["state"] = "mutated"
+
+    assert normalized.payload["items"][0]["state"] == "safe"
+
+    db = tmp_path / "runtime.db"
+    event = submit_supervisor_intent(
+        supervisor_id="fixture",
+        idempotency_key="supervisor:tuple",
+        intent={"kind": "observe", "payload": {"items": ({"state": "safe"},)}},
+        path=db,
+    )
+    persisted = get_event(event["id"], path=db)
+    assert persisted is not None
+    assert persisted["payload"] == {"items": [{"state": "safe"}]}
+
+
 def test_write_like_intent_uses_durable_ingress_without_authority(tmp_path: Path):
     db = tmp_path / "runtime.db"
     event = submit_supervisor_intent(
