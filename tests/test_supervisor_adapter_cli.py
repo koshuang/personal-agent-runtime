@@ -7,6 +7,7 @@ from pathlib import Path
 
 from par.ingress import get_event, list_events
 from par.portability import export_state, restore_state
+from par.supervisor_adapter import MAX_PROPOSAL_CHARS
 
 
 def _adapter(db: Path, supervisor: str, key: str, proposal: dict, *, check: bool = True):
@@ -85,4 +86,14 @@ def test_real_adapter_escalation_fails_without_partial_durable_side_effect(tmp_p
     )
 
     assert completed.returncode != 0
+    assert list_events(path=db) == []
+
+
+def test_real_adapter_rejects_oversized_proposal_without_durable_side_effect(tmp_path: Path) -> None:
+    db = tmp_path / "runtime.db"
+    proposal = {"kind": "observe", "payload": {"finding": "x" * MAX_PROPOSAL_CHARS}}
+    completed = _adapter(db, "fixture", "supervisor:oversized", proposal, check=False)
+
+    assert completed.returncode != 0
+    assert "supervisor proposal exceeds maximum size" in completed.stderr
     assert list_events(path=db) == []
