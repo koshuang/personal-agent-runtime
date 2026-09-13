@@ -9,9 +9,14 @@ from typing import TextIO
 from .db import DEFAULT_DB
 from .supervisor import submit_supervisor_intent
 
+MAX_PROPOSAL_CHARS = 64 * 1024
+
 
 def _read_proposal(stream: TextIO) -> dict:
-    proposal = json.load(stream)
+    raw = stream.read(MAX_PROPOSAL_CHARS + 1)
+    if len(raw) > MAX_PROPOSAL_CHARS:
+        raise ValueError("supervisor proposal exceeds maximum size")
+    proposal = json.loads(raw)
     if not isinstance(proposal, dict):
         raise ValueError("supervisor proposal must be a JSON object")
     return proposal
