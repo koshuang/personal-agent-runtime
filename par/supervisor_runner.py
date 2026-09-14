@@ -37,6 +37,7 @@ def main() -> None:
         input=proposal,
         capture_output=True,
         text=True,
+        encoding="utf-8",
         check=True,
         env=sanitized_environment(),
     )
@@ -54,7 +55,9 @@ def main() -> None:
         ],
         input=completed.stdout,
         text=True,
+        encoding="utf-8",
         check=True,
+        env=sanitized_environment(),
     )
 
 
