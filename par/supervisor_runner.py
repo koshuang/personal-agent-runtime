@@ -10,6 +10,7 @@ from pathlib import Path
 from .db import DEFAULT_DB
 
 SAFE_ENV_KEYS = ("PATH", "PYTHONPATH", "PYTHONHOME", "SYSTEMROOT", "WINDIR")
+PROVIDER_TIMEOUT_SECONDS = 30
 
 
 def sanitized_environment(source: dict[str, str] | None = None) -> dict[str, str]:
@@ -40,6 +41,7 @@ def main() -> None:
         encoding="utf-8",
         check=True,
         env=sanitized_environment(),
+        timeout=PROVIDER_TIMEOUT_SECONDS,
     )
     subprocess.run(
         [
