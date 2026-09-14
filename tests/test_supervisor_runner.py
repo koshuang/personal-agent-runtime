@@ -1,14 +1,19 @@
 from __future__ import annotations
 
+import io
 import json
 import os
 import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
+import par.supervisor_runner as supervisor_runner
 from par.ingress import get_event, list_events
 from par.portability import export_state, restore_state
-from par.supervisor_runner import sanitized_environment
+from par.supervisor_adapter import MAX_PROPOSAL_CHARS
+from par.supervisor_runner import MAX_PROVIDER_OUTPUT_CHARS, sanitized_environment
 
 
 def _runner(db: Path, provider: str, key: str, proposal: dict, *, env=None, check=True):
@@ -50,6 +55,42 @@ def test_provider_child_does_not_receive_parent_ambient_secret(tmp_path: Path) -
     )
     assert completed.returncode == 0
     assert len(list_events(path=db)) == 1
+
+
+def test_runner_rejects_oversized_input_before_launching_provider(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    db = tmp_path / "runtime.db"
+    monkeypatch.setattr(sys, "stdin", io.StringIO("x" * (MAX_PROPOSAL_CHARS + 1)))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "par.supervisor_runner",
+            "--db",
+            str(db),
+            "--provider",
+            "fixture_a",
+            "--idempotency-key",
+            "supervisor:oversized-input",
+        ],
+    )
+
+    def unexpected_run(*args, **kwargs):
+        raise AssertionError("provider must not launch for oversized input")
+
+    monkeypatch.setattr(supervisor_runner.subprocess, "run", unexpected_run)
+    with pytest.raises(ValueError, match="proposal exceeds maximum size"):
+        supervisor_runner.main()
+    assert not db.exists()
+
+
+def test_provider_output_is_bounded_before_forwarding(monkeypatch: pytest.MonkeyPatch) -> None:
+    def oversized_output(*args, **kwargs):
+        kwargs["stdout"].write("x" * (MAX_PROVIDER_OUTPUT_CHARS + 1))
+        return subprocess.CompletedProcess(args[0], 0)
+
+    monkeypatch.setattr(supervisor_runner.subprocess, "run", oversized_output)
+    with pytest.raises(ValueError, match="provider output exceeds maximum size"):
+        supervisor_runner._run_provider("fixture_a", "{}")
 
 
 def test_real_provider_replacement_preserves_durable_semantics_and_restore(tmp_path: Path) -> None:
