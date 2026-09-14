@@ -78,7 +78,7 @@ Issue #14 remote MCP stable-HTTPS / ChatGPT Developer Mode verification remains 
 
 ## Phase 5 — Supervisor Adapters
 
-Status: **active**
+Status: **complete**
 
 Target capabilities:
 
@@ -86,7 +86,11 @@ Target capabilities:
 - supervisors do not receive ambient company credentials;
 - supervisor replacement does not require changing Shared State semantics.
 
-Current direction: define the smallest provider-neutral supervisor adapter contract and prove one bounded adapter path without changing Shared State semantics or expanding credential/cost authority.
+### Exit evidence
+
+Phase 5 is complete. PR #84 proves a bounded real supervisor adapter path through the existing durable ingress contract: supervisor identity remains descriptive rather than authoritative, credential/authority escalation and oversized proposals fail closed without partial durable writes, and portable state can be restored by a fresh runtime. The adapter tests exercise equivalent proposals from `hermes` and a `replacement` provider and verify equivalent durable `kind / payload / requested_action / authority / authority_is_grant` semantics; Issue #85 reconciliation confirmed this provider-replacement evidence was already satisfied and required no duplicate implementation.
+
+Issue #14 remote MCP stable-HTTPS / external credential / ChatGPT Developer Mode verification remains a separate human-only boundary and is not implicitly completed by this phase transition. No next implementation phase is activated here; future work remains evidence-driven through roadmap/runtime-friction reconciliation.
 
 ## Explicitly deferred
 
