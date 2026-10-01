@@ -12,7 +12,7 @@
 - `list_documents`
 - `extract_pdf`（受限 local document root、password-gated extraction）
 
-`echo` Worker Adapter、deterministic verification 與 automatic task execution 已可在本機 bounded path 驗證。這些證據只代表 deterministic local workspace execution；不代表 provider-backed worker、public deployment 或 ChatGPT external connector 已完成。遠端 stable HTTPS / Developer Mode 驗證仍由 Issue #14 追蹤。
+`echo` Worker Adapter、deterministic verification 與 automatic task execution 已可在本機 bounded path 驗證。預設檢查證明 bounded local `echo` worker path；另有直接使用 `NewReadOnlyWorkspaceWorker` 的專用檢查，證明 bounded local workspace-worker path。兩者都不代表 provider-backed worker、public deployment 或 ChatGPT external connector 已完成。遠端 stable HTTPS / Developer Mode 驗證仍由 Issue #14 追蹤。
 
 ## 啟動
 
