@@ -122,6 +122,15 @@ See [`docs/mcp-mvp-local-test.md`](./docs/mcp-mvp-local-test.md) for the current
 
 The original shared-state prototype is still valid and should be preserved while the MCP/API vertical slice is built.
 
+Python 3.11+ is supported. From a fresh clone, install the package and its declared test dependencies in an isolated virtual environment, then run the complete Python suite:
+
+```bash
+python -m venv .venv
+. .venv/bin/activate
+python -m pip install -e '.[test]'
+pytest -q
+```
+
 ```bash
 python -m par init
 python -m par task create \
