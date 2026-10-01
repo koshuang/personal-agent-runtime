@@ -19,31 +19,9 @@ Read these in order:
 
 Canonical state is GitHub + runtime durable state + roadmap/spec docs. **Chat history is not canonical state.**
 
-### Current main implementation track
+### Current implementation track
 
-The current priority is **Issue #5: v0.1 MCP / async task execution vertical slice**.
-
-Target end-to-end flow:
-
-```text
-ChatGPT / MCP client
-        ↓
-MCP / HTTP API
-        ↓
-Async Task
-        ↓
-Persisted State
-        ↓
-Worker
-        ↓
-Deterministic Verification
-        ↓
-Verified Result + Evidence
-```
-
-Current working PR: **#6 — Go async task API bootstrap**.
-
-Unless a higher-priority safety/reliability blocker appears, continue this track instead of creating a parallel runtime.
+Phases 1–4 are complete; Phase 5 (Supervisor Adapters) is active. The Go runtime already provides a bounded local MCP / HTTP execution path with persisted state, an automatic deterministic `echo` worker, verification, and result artifacts. Issue #14 remains the separate external-integration boundary for stable HTTPS / ChatGPT Developer Mode evidence.
 
 ## Definition of done for the v0.1 MVP
 
@@ -75,14 +53,7 @@ The existing Python runtime remains useful as the Phase 1 durable-state prototyp
 
 ## Local test — current Go API slice
 
-Checkout the current implementation branch:
-
-```bash
-git fetch
-git checkout feat/issue-5-go-mcp-mvp
-```
-
-Start the API:
+From current `main`:
 
 ```bash
 go mod tidy
@@ -91,32 +62,15 @@ go run ./cmd/server
 
 Defaults:
 
-- API: `http://localhost:8080`
+- API: `http://127.0.0.1:8080`
+- MCP: `http://127.0.0.1:8080/mcp`
 - SQLite: `.par/runtime-go.db`
+- default bounded worker: deterministic local `echo`
+- default cost ceiling: `max_cost_usd=0`
 
-Health check:
+A submitted task is executed automatically by the local worker, deterministically verified, and completes with durable result evidence such as `worker-result.json`. Restart the server with the same `PAR_DB` and query the same task ID to verify persistence.
 
-```bash
-curl -sS http://localhost:8080/healthz
-```
-
-Create a task:
-
-```bash
-curl -sS -X POST http://localhost:8080/v1/tasks \
-  -H 'content-type: application/json' \
-  -d '{"prompt":"inspect this runtime and return a short health summary"}'
-```
-
-Query it:
-
-```bash
-curl -sS http://localhost:8080/v1/tasks/<task_id>
-```
-
-Restart the server and query the same ID again. The task should still exist.
-
-See [`docs/mcp-mvp-local-test.md`](./docs/mcp-mvp-local-test.md) for the current verification steps.
+This proves the bounded local workspace path only. It is not evidence of a provider-backed worker, public deployment, or ChatGPT external connectivity. See [`docs/mcp-mvp-local-test.md`](./docs/mcp-mvp-local-test.md) for reproducible HTTP, MCP, result, and restart checks; external stable-HTTPS / Developer Mode validation remains tracked by [Issue #14](https://github.com/koshuang/personal-agent-runtime/issues/14).
 
 ## Existing Python Phase 1 runtime
 
@@ -178,8 +132,8 @@ For the current MVP, `max_cost_usd = 0` should be treated as a hard default unle
 
 - [`AGENTS.md`](./AGENTS.md)
 - [`ROADMAP.md`](./ROADMAP.md)
-- [Issue #5 — v0.1 MCP / async task vertical slice](https://github.com/koshuang/personal-agent-runtime/issues/5)
-- [PR #6 — Go async task API bootstrap](https://github.com/koshuang/personal-agent-runtime/pull/6)
+- [Issue #14 — remote MCP stable-HTTPS / ChatGPT Developer Mode verification](https://github.com/koshuang/personal-agent-runtime/issues/14)
+- [ROADMAP.md](./ROADMAP.md) — current phase and exit evidence
 
 ## What not to build yet
 
