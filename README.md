@@ -70,7 +70,7 @@ Defaults:
 
 A submitted task is executed automatically by the local worker, deterministically verified, and completes with durable result evidence such as `worker-result.json`. Restart the server with the same `PAR_DB` and query the same task ID to verify persistence.
 
-This proves the bounded local workspace path only. It is not evidence of a provider-backed worker, public deployment, or ChatGPT external connectivity. See [`docs/mcp-mvp-local-test.md`](./docs/mcp-mvp-local-test.md) for reproducible HTTP, MCP, result, and restart checks; external stable-HTTPS / Developer Mode validation remains tracked by [Issue #14](https://github.com/koshuang/personal-agent-runtime/issues/14).
+The default checks prove the bounded local `echo` worker path. Dedicated checks that instantiate `NewReadOnlyWorkspaceWorker` separately prove the bounded local workspace-worker path. Neither establishes a provider-backed worker, public deployment, or ChatGPT external connectivity. See [`docs/mcp-mvp-local-test.md`](./docs/mcp-mvp-local-test.md) for reproducible HTTP, MCP, result, and restart checks; external stable-HTTPS / Developer Mode validation remains tracked by [Issue #14](https://github.com/koshuang/personal-agent-runtime/issues/14).
 
 ## Existing Python Phase 1 runtime
 
