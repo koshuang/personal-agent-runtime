@@ -12,7 +12,7 @@
 - `list_documents`
 - `extract_pdf`（受限 local document root、password-gated extraction）
 
-Worker Adapter、deterministic verification 與 automatic task execution 仍會沿 Issue #5 繼續補齊；因此目前不能把整個 v0.1 MVP 宣告為 DONE。
+`echo` Worker Adapter、deterministic verification 與 automatic task execution 已可在本機 bounded path 驗證。這些證據只代表 deterministic local workspace execution；不代表 provider-backed worker、public deployment 或 ChatGPT external connector 已完成。遠端 stable HTTPS / Developer Mode 驗證仍由 Issue #14 追蹤。
 
 ## 啟動
 
@@ -46,11 +46,13 @@ curl -sS -X POST http://127.0.0.1:8080/v1/tasks \
 
 預期立即得到 `202 Accepted` 與 `task_id`。
 
-## HTTP API：查詢任務
+## HTTP API：查詢任務與結果
 
 ```bash
 curl -sS http://127.0.0.1:8080/v1/tasks/<task_id>
 ```
+
+本機預設 worker 為 deterministic `echo`。等待任務完成後，預期 task 顯示 completed / verified 狀態，worker 為 `echo`，成本上限維持 `max_cost_usd=0`，並可取得 durable result artifact（例如 `worker-result.json`）。這是 local bounded evidence，不是外部模型 provider 的執行證據。
 
 ## MCP：initialize
 
@@ -144,7 +146,7 @@ curl -sS -X POST http://127.0.0.1:8080/mcp \
 2. 停掉 Go server。
 3. 再次執行 `go run ./cmd/server`。
 4. 用同一個 `task_id` 查詢。
-5. 任務仍存在即代表 state 已跨 process restart 保留。
+5. 任務仍存在，且 completed result / artifact 仍可查詢，代表 task state 與執行結果已跨 process restart 保留。
 
 ## ChatGPT Developer Mode / 遠端 MCP boundary
 
@@ -159,7 +161,7 @@ v0.1 的 Runtime 本身目前**不是 public multi-tenant service**。它沒有�
 
 Runtime 仍維持 loopback listener，由 gateway 代理到 `http://127.0.0.1:8080/mcp`。MCP handler 也只允許無 `Origin` 的 server-to-server request 或 loopback browser origin，不回傳 wildcard CORS。
 
-在這些 protection 尚未存在前，ChatGPT external connector registration 應視為**尚未完成的 integration evidence**，不能以直接 public exposure 來繞過安全 boundary。
+在這些 protection 尚未存在前，ChatGPT external connector registration 應視為**尚未完成的 integration evidence**，不能以直接 public exposure 來繞過安全 boundary。這個剩餘驗證由 [Issue #14](https://github.com/koshuang/personal-agent-runtime/issues/14) 追蹤；本機 `echo` 成功不可用來關閉它。
 
 ## 自動測試
 
@@ -171,9 +173,10 @@ CI 會驗證 HTTP API 與 MCP 的核心行為，包括 initialize、tools/list�
 
 ## 目前刻意尚未完成
 
+- provider-backed natural-language worker
+- stable HTTPS + ChatGPT Developer Mode external validation（Issue #14）
 - Email attachment connector / inbox automation
 - OCR for scanned-image PDFs
-- provider-backed natural-language document worker
 - Runtime-native public authentication / per-principal quota / retention
 
-這些完成並具有 E2E evidence 前，不得把 Issue #5 或 v0.1 MVP 宣告為 DONE。
+本機 deterministic `echo` execution、verification、result artifact 與 restart persistence 已有 bounded evidence；以上 deferred scope 不得因本機成功而被宣告完成。
