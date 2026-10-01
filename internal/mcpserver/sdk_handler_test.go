@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/koshuang/personal-agent-runtime/internal/document"
 	"github.com/koshuang/personal-agent-runtime/internal/task"
 )
 
@@ -117,6 +118,32 @@ func TestOfficialSDKTaskLifecycle(t *testing.T) {
 	}
 	if persisted.Status != "canceled" {
 		t.Fatalf("persisted status=%q want=canceled", persisted.Status)
+	}
+}
+
+func TestOfficialSDKPDFToolUsesDocumentRootBoundary(t *testing.T) {
+	store, err := task.Open(filepath.Join(t.TempDir(), "runtime.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	documents, err := document.NewService(t.TempDir())
+	if err != nil {
+		t.Fatalf("new document service: %v", err)
+	}
+	t.Cleanup(func() { _ = documents.Close() })
+
+	h := NewSDK(task.NewService(store), documents)
+	listed := sdkRPCCall(t, h, `{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`)
+	tools := listed["result"].(map[string]any)["tools"].([]any)
+	if len(tools) != 6 {
+		t.Fatalf("tools=%d want=6", len(tools))
+	}
+
+	call := sdkRPCCall(t, h, `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"extract_pdf","arguments":{"path":"../secret.pdf","password":"not-persisted"}}}`)
+	result := call["result"].(map[string]any)
+	if result["isError"] != true {
+		t.Fatalf("expected path boundary error: %#v", result)
 	}
 }
 

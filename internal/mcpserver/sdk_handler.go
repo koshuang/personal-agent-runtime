@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/koshuang/personal-agent-runtime/internal/document"
 	"github.com/koshuang/personal-agent-runtime/internal/task"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -18,13 +19,17 @@ import (
 //
 // It intentionally reuses the same task.Service as the legacy adapter so the
 // transport can be swapped without changing task lifecycle semantics.
-func NewSDK(tasks *task.Service) http.Handler {
+func NewSDK(tasks *task.Service, documents ...*document.Service) http.Handler {
 	server := mcp.NewServer(&mcp.Implementation{
 		Name:    "personal-agent-runtime",
 		Version: "0.1.0",
 	}, nil)
 
-	registerSDKTools(server, tasks)
+	var docs *document.Service
+	if len(documents) > 0 {
+		docs = documents[0]
+	}
+	registerSDKTools(server, tasks, docs)
 
 	transport := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server {
 		return server
@@ -97,9 +102,22 @@ type sdkCancelResult struct {
 	Status string `json:"status"`
 }
 
+type sdkExtractPDFArgs struct {
+	Path     string `json:"path" jsonschema:"Relative path to a PDF under the configured document root."`
+	Password string `json:"password,omitempty" jsonschema:"Password for the PDF. Never include passwords in task prompts."`
+}
+
+type sdkListDocumentsArgs struct {
+	Prefix string `json:"prefix,omitempty" jsonschema:"Optional relative directory under the document root."`
+}
+
+type sdkListDocumentsResult struct {
+	Documents []document.DocumentEntry `json:"documents"`
+}
+
 func boolPtr(v bool) *bool { return &v }
 
-func registerSDKTools(server *mcp.Server, tasks *task.Service) {
+func registerSDKTools(server *mcp.Server, tasks *task.Service, documents *document.Service) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "submit_task",
 		Description: "Queue a new asynchronous task in Personal Agent Runtime. Returns a durable task_id immediately; use get_task to inspect progress later.",
@@ -161,6 +179,32 @@ func registerSDKTools(server *mcp.Server, tasks *task.Service) {
 		}
 		return nil, sdkCancelResult{TaskID: id, Status: "canceled"}, nil
 	})
+
+	if documents != nil {
+		mcp.AddTool(server, &mcp.Tool{
+			Name:        "list_documents",
+			Description: "List PDF files available under the configured local document inbox. Returns relative file handles only; use extract_pdf with one selected path.",
+			Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, DestructiveHint: boolPtr(false), IdempotentHint: true, OpenWorldHint: boolPtr(false)},
+		}, func(ctx context.Context, _ *mcp.CallToolRequest, args sdkListDocumentsArgs) (*mcp.CallToolResult, sdkListDocumentsResult, error) {
+			files, err := documents.ListPDFs(ctx, args.Prefix)
+			if err != nil {
+				return nil, sdkListDocumentsResult{}, err
+			}
+			return nil, sdkListDocumentsResult{Documents: files}, nil
+		})
+
+		mcp.AddTool(server, &mcp.Tool{
+			Name:        "extract_pdf",
+			Description: "Read a PDF under the configured local document root, unlock it with the supplied password when needed, and return extracted text plus bounded metadata. Passwords are not persisted or returned.",
+			Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, DestructiveHint: boolPtr(false), IdempotentHint: true, OpenWorldHint: boolPtr(false)},
+		}, func(ctx context.Context, _ *mcp.CallToolRequest, args sdkExtractPDFArgs) (*mcp.CallToolResult, document.PDFResult, error) {
+			result, err := documents.ExtractPDF(ctx, strings.TrimSpace(args.Path), args.Password)
+			if err != nil {
+				return nil, document.PDFResult{}, err
+			}
+			return nil, result, nil
+		})
+	}
 }
 
 func normalizeSDKTaskError(err error) error {

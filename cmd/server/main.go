@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/koshuang/personal-agent-runtime/internal/artifact"
+	"github.com/koshuang/personal-agent-runtime/internal/document"
 	"github.com/koshuang/personal-agent-runtime/internal/execution"
 	"github.com/koshuang/personal-agent-runtime/internal/httpauth"
 	"github.com/koshuang/personal-agent-runtime/internal/httplimit"
@@ -44,6 +45,12 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	documentRoot := env("PAR_DOCUMENT_ROOT", filepath.Join(filepath.Dir(dbPath), "inbox"))
+	documents, err := document.NewService(documentRoot)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer documents.Close()
 	defer store.Close()
 
 	artifactRoot := env("PAR_ARTIFACTS", ".par/artifacts")
@@ -120,13 +127,13 @@ func main() {
 	mux.Handle("GET /v1/tasks/{id}", protect(http.HandlerFunc(s.getTask)))
 	mux.Handle("GET /v1/tasks/{id}/result", protect(http.HandlerFunc(s.getResult)))
 	mux.Handle("POST /v1/tasks/{id}/cancel", protect(http.HandlerFunc(s.cancelTask)))
-	mux.Handle("/mcp", protect(mcpserver.NewSDK(tasks)))
+	mux.Handle("/mcp", protect(mcpserver.NewSDK(tasks, documents)))
 
 	authMode := "disabled-loopback"
 	if mcpToken != "" {
 		authMode = "bearer"
 	}
-	log.Printf("personal-agent-runtime API listening on %s (db=%s, artifacts=%s, worker=%s, max_cost_usd=%g, mcp=/mcp, auth=%s, rate_limit_rpm=%d, rate_limit_burst=%d, dispatcher=enabled)", addr, dbPath, artifactRoot, workerName, maxCostUSD, authMode, rateLimitRPM, rateLimitBurst)
+	log.Printf("personal-agent-runtime API listening on %s (db=%s, artifacts=%s, documents=%s, worker=%s, max_cost_usd=%g, mcp=/mcp, auth=%s, rate_limit_rpm=%d, rate_limit_burst=%d, dispatcher=enabled)", addr, dbPath, artifactRoot, documentRoot, workerName, maxCostUSD, authMode, rateLimitRPM, rateLimitBurst)
 	httpServer := newHTTPServer(addr, mux)
 	log.Fatal(httpServer.ListenAndServe())
 }

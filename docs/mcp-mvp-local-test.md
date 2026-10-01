@@ -9,6 +9,8 @@
 - `get_task`
 - `get_task_result`
 - `cancel_task`
+- `list_documents`
+- `extract_pdf`（受限 local document root、password-gated extraction）
 
 Worker Adapter、deterministic verification 與 automatic task execution 仍會沿 Issue #5 繼續補齊；因此目前不能把整個 v0.1 MVP 宣告為 DONE。
 
@@ -24,6 +26,7 @@ go run ./cmd/server
 - HTTP: `http://127.0.0.1:8080`
 - MCP: `http://127.0.0.1:8080/mcp`
 - SQLite: `.par/runtime-go.db`
+- Document inbox: `PAR_DOCUMENT_ROOT`，預設為 `.par/inbox`
 
 可用 `PAR_ADDR` 與 `PAR_DB` 覆寫。預設刻意只綁定 loopback；不要把 `PAR_ADDR` 改成 public listener，除非前方已有明確的 authentication、request/storage quota、rate limiting 與 retention policy。
 
@@ -110,6 +113,31 @@ curl -sS -X POST http://127.0.0.1:8080/mcp \
 
 從 `structuredContent.task_id` 取得 task id，再呼叫 `get_task` / `get_task_result` / `cancel_task`。
 
+## MCP：解密並抽取 local PDF
+
+`extract_pdf` 只允許讀取 `PAR_DOCUMENT_ROOT` 底下的相對路徑，不接受絕對路徑或 traversal。PDF password 只存在於當次 request memory，不會寫入 task state、artifact 或 log。
+
+先列出 inbox 內的 PDF，取得相對 file handle：
+
+```bash
+curl -sS -X POST http://127.0.0.1:8080/mcp \
+  -H 'content-type: application/json' \
+  -H 'accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"list_documents","arguments":{}}}'
+```
+
+```bash
+mkdir -p .par/inbox
+cp /path/to/statement.pdf .par/inbox/statement.pdf
+
+curl -sS -X POST http://127.0.0.1:8080/mcp \
+  -H 'content-type: application/json' \
+  -H 'accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"extract_pdf","arguments":{"path":"statement.pdf","password":"<password>"}}}'
+```
+
+回應包含 bounded `text`、`path`、`pages`、`bytes`、`sha256` 與 `encrypted` metadata。錯誤 password 會 fail closed。不要把真實 password 放在 task prompt、shell history 或 GitHub issue。
+
 ## 驗證 restart-safe
 
 1. 建立一個 task。
@@ -143,9 +171,9 @@ CI 會驗證 HTTP API 與 MCP 的核心行為，包括 initialize、tools/list�
 
 ## 目前刻意尚未完成
 
-- Worker Adapter
-- deterministic verification
-- automatic task execution
+- Email attachment connector / inbox automation
+- OCR for scanned-image PDFs
+- provider-backed natural-language document worker
 - Runtime-native public authentication / per-principal quota / retention
 
 這些完成並具有 E2E evidence 前，不得把 Issue #5 或 v0.1 MVP 宣告為 DONE。
