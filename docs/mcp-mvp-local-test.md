@@ -94,6 +94,8 @@ curl -sS -X POST http://127.0.0.1:8080/mcp \
 - `get_task`
 - `get_task_result`
 - `cancel_task`
+- `list_documents`
+- `extract_pdf`
 
 每個工具都應包含 input schema 與安全 annotations。
 
@@ -102,6 +104,7 @@ curl -sS -X POST http://127.0.0.1:8080/mcp \
 ```bash
 curl -sS -X POST http://127.0.0.1:8080/mcp \
   -H 'content-type: application/json' \
+  -H 'accept: application/json, text/event-stream' \
   -d '{
     "jsonrpc":"2.0",
     "id":3,
