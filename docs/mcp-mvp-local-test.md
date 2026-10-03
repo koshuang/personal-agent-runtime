@@ -52,7 +52,7 @@ curl -sS -X POST http://127.0.0.1:8080/v1/tasks \
 curl -sS http://127.0.0.1:8080/v1/tasks/<task_id>
 ```
 
-本機預設 worker 為 deterministic `echo`。等待任務完成後，預期 task 顯示 `completed` 狀態；runner 會在完成前驗證 worker result。worker 為 `echo`，成本上限維持 `max_cost_usd=0`，並可取得 durable result artifact（例如 `worker-result.json`）。這是 local bounded evidence，不是外部模型 provider 的執行證據。
+本機預設 worker 為 deterministic `echo`。等待任務完成後，預期 task 顯示 `completed` 狀態；runner 會在完成前驗證 worker result。worker 為 `echo`，成本上限維持 `max_cost_usd=0`，並會持久化 durable result artifact（例如 `worker-result.json`）。`get_task_result` 與 `GET /v1/tasks/{id}/result` 回傳 artifact reference，不會傳送 artifact bytes；要讀取 bytes，需從本機 `PAR_ARTIFACTS` store（預設 `.par/artifacts`）讀取該 reference。這是 local bounded evidence，不是外部模型 provider 的執行證據。
 
 ## MCP：initialize
 
@@ -146,10 +146,10 @@ curl -sS -X POST http://127.0.0.1:8080/mcp \
 ## 驗證 restart-safe
 
 1. 建立一個 task。
-2. 重複查詢 task，直到 `status=completed`，並確認 completed result / artifact 可查詢。
+2. 重複查詢 task，直到 `status=completed`，並確認 completed result 與 artifact reference 可查詢。
 3. 停掉 Go server。
 4. 再次執行 `go run ./cmd/server`。
-5. 用同一個 `task_id` 查詢，並確認 completed result / artifact 仍可查詢，代表 task state 與執行結果已跨 process restart 保留。
+5. 用同一個 `task_id` 查詢，並確認 completed result 與 artifact reference 仍可查詢。從本機 `PAR_ARTIFACTS` store 讀取 artifact bytes；HTTP result endpoint 不會傳送這些 bytes。這代表 task state、執行結果與 artifact file 已跨 process restart 保留。
 
 ## ChatGPT Developer Mode / 遠端 MCP boundary
 
