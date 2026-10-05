@@ -36,6 +36,8 @@ go run ./cmd/server
 curl -sS http://127.0.0.1:8080/healthz
 ```
 
+預期回傳 HTTP `200 OK`。
+
 ## HTTP API：建立任務
 
 ```bash
