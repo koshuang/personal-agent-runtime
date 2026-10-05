@@ -148,7 +148,7 @@ curl -sS -X POST http://127.0.0.1:8080/mcp \
 1. 建立一個 task。
 2. 重複查詢 task，直到 `status=completed`，並確認 completed result 與 artifact reference 可查詢。
 3. 停掉 Go server。
-4. 使用與首次啟動相同的工作目錄再次執行 `go run ./cmd/server`；若設定 `PAR_ARTIFACTS`，請沿用相同值。
+4. 使用與首次啟動相同的工作目錄再次執行 `go run ./cmd/server`；若設定 `PAR_DB` 或 `PAR_ARTIFACTS`，請分別沿用相同值。
 5. 用同一個 `task_id` 查詢，並確認 completed result 與 artifact reference 仍可查詢。從本機 `PAR_ARTIFACTS` store 讀取 artifact bytes；HTTP result endpoint 不會傳送這些 bytes。這代表 task state、執行結果與 artifact file 已跨 process restart 保留。
 
 ## ChatGPT Developer Mode / 遠端 MCP boundary
