@@ -12,7 +12,7 @@
 - `list_documents`
 - `extract_pdf`（受限 local document root、password-gated extraction）
 
-Worker Adapter、deterministic verification 與 automatic task execution 仍會沿 Issue #5 繼續補齊；因此目前不能把整個 v0.1 MVP 宣告為 DONE。
+`echo` Worker Adapter、deterministic verification 與 automatic task execution 已可在本機 bounded path 驗證。預設檢查證明 bounded local `echo` worker path；另有直接使用 `NewReadOnlyWorkspaceWorker` 的專用檢查，證明 bounded local workspace-worker path。兩者都不代表 provider-backed worker、public deployment 或 ChatGPT external connector 已完成。遠端 stable HTTPS / Developer Mode 驗證仍由 Issue #14 追蹤。
 
 ## 啟動
 
@@ -36,6 +36,8 @@ go run ./cmd/server
 curl -sS http://127.0.0.1:8080/healthz
 ```
 
+預期回傳 HTTP `200 OK`。
+
 ## HTTP API：建立任務
 
 ```bash
@@ -46,11 +48,13 @@ curl -sS -X POST http://127.0.0.1:8080/v1/tasks \
 
 預期立即得到 `202 Accepted` 與 `task_id`。
 
-## HTTP API：查詢任務
+## HTTP API：查詢任務與結果
 
 ```bash
 curl -sS http://127.0.0.1:8080/v1/tasks/<task_id>
 ```
+
+本機預設 worker 為 deterministic `echo`。等待任務完成後，預期 task 顯示 `completed` 狀態；runner 會在完成前驗證 worker result。worker 為 `echo`，成本上限維持 `max_cost_usd=0`，並會持久化 durable result artifact（例如 `worker-result.json`）。`get_task_result` 與 `GET /v1/tasks/{id}/result` 回傳 artifact reference，不會傳送 artifact bytes；要讀取 bytes，需從本機 `PAR_ARTIFACTS` store（預設 `.par/artifacts`）讀取該 reference。這是 local bounded evidence，不是外部模型 provider 的執行證據。
 
 ## MCP：initialize
 
@@ -92,6 +96,8 @@ curl -sS -X POST http://127.0.0.1:8080/mcp \
 - `get_task`
 - `get_task_result`
 - `cancel_task`
+- `list_documents`
+- `extract_pdf`
 
 每個工具都應包含 input schema 與安全 annotations。
 
@@ -100,6 +106,7 @@ curl -sS -X POST http://127.0.0.1:8080/mcp \
 ```bash
 curl -sS -X POST http://127.0.0.1:8080/mcp \
   -H 'content-type: application/json' \
+  -H 'accept: application/json, text/event-stream' \
   -d '{
     "jsonrpc":"2.0",
     "id":3,
@@ -141,10 +148,10 @@ curl -sS -X POST http://127.0.0.1:8080/mcp \
 ## 驗證 restart-safe
 
 1. 建立一個 task。
-2. 停掉 Go server。
-3. 再次執行 `go run ./cmd/server`。
-4. 用同一個 `task_id` 查詢。
-5. 任務仍存在即代表 state 已跨 process restart 保留。
+2. 重複查詢 task，直到 `status=completed`，並確認 completed result 與 artifact reference 可查詢。
+3. 停掉 Go server。
+4. 使用與首次啟動相同的工作目錄再次執行 `go run ./cmd/server`；若設定 `PAR_DB` 或 `PAR_ARTIFACTS`，請分別沿用相同值。
+5. 用同一個 `task_id` 查詢，並確認 completed result 與 artifact reference 仍可查詢。從本機 `PAR_ARTIFACTS` store 讀取 artifact bytes；HTTP result endpoint 不會傳送這些 bytes。這代表 task state、執行結果與 artifact file 已跨 process restart 保留。
 
 ## ChatGPT Developer Mode / 遠端 MCP boundary
 
@@ -159,7 +166,7 @@ v0.1 的 Runtime 本身目前**不是 public multi-tenant service**。它沒有�
 
 Runtime 仍維持 loopback listener，由 gateway 代理到 `http://127.0.0.1:8080/mcp`。MCP handler 也只允許無 `Origin` 的 server-to-server request 或 loopback browser origin，不回傳 wildcard CORS。
 
-在這些 protection 尚未存在前，ChatGPT external connector registration 應視為**尚未完成的 integration evidence**，不能以直接 public exposure 來繞過安全 boundary。
+在這些 protection 尚未存在前，ChatGPT external connector registration 應視為**尚未完成的 integration evidence**，不能以直接 public exposure 來繞過安全 boundary。這個剩餘驗證由 [Issue #14](https://github.com/koshuang/personal-agent-runtime/issues/14) 追蹤；本機 `echo` 成功不可用來關閉它。
 
 ## 自動測試
 
@@ -171,9 +178,10 @@ CI 會驗證 HTTP API 與 MCP 的核心行為，包括 initialize、tools/list�
 
 ## 目前刻意尚未完成
 
+- provider-backed natural-language worker
+- stable HTTPS + ChatGPT Developer Mode external validation（Issue #14）
 - Email attachment connector / inbox automation
 - OCR for scanned-image PDFs
-- provider-backed natural-language document worker
 - Runtime-native public authentication / per-principal quota / retention
 
-這些完成並具有 E2E evidence 前，不得把 Issue #5 或 v0.1 MVP 宣告為 DONE。
+本機 deterministic `echo` execution、verification、result artifact 與 restart persistence 已有 bounded evidence；以上 deferred scope 不得因本機成功而被宣告完成。
