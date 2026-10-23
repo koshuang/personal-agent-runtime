@@ -99,6 +99,79 @@ func TestCodexAdapterPreservesVerifiedEvidenceThroughHTTPAndMCP(t *testing.T) {
 	})
 }
 
+func TestCodexAdapterResultSurvivesRestartAndRemainsQueryableThroughHTTPAndMCP(t *testing.T) {
+	root := t.TempDir()
+	executable := writeCodexResultFixture(t, root)
+	dbPath := filepath.Join(root, "runtime.db")
+	artifactRoot := filepath.Join(root, "artifacts")
+
+	store1, err := task.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open first store: %v", err)
+	}
+	artifacts, err := artifact.NewStore(artifactRoot)
+	if err != nil {
+		_ = store1.Close()
+		t.Fatalf("open artifacts: %v", err)
+	}
+	worker, err := execution.NewCodexWorker(execution.CodexWorkerConfig{Executable: executable, WorkspaceRoot: root})
+	if err != nil {
+		_ = store1.Close()
+		t.Fatalf("new codex worker: %v", err)
+	}
+	router, err := execution.NewRouter(0, execution.RouteCandidate{Name: "codex", Worker: worker, EstimatedCostUSD: 0})
+	if err != nil {
+		_ = store1.Close()
+		t.Fatalf("new router: %v", err)
+	}
+	service1 := task.NewService(store1)
+	runner := execution.NewRunner(service1, router, execution.DeterministicVerifier{}, execution.WithArtifactWriter(artifacts))
+	created, err := service1.Create(t.Context(), "survive process restart")
+	if err != nil {
+		_ = store1.Close()
+		t.Fatalf("create task: %v", err)
+	}
+	if err := runner.Run(t.Context(), created.ID); err != nil {
+		_ = store1.Close()
+		t.Fatalf("run: %v", err)
+	}
+	if err := store1.Close(); err != nil {
+		t.Fatalf("close first store: %v", err)
+	}
+
+	store2, err := task.Open(dbPath)
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	t.Cleanup(func() { _ = store2.Close() })
+	service2 := task.NewService(store2)
+	s := &server{tasks: service2}
+	httpResult := httptest.NewRecorder()
+	testMux(s).ServeHTTP(httpResult, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/tasks/"+created.ID+"/result", nil))
+	if httpResult.Code != http.StatusOK {
+		t.Fatalf("HTTP result after restart status=%d body=%s", httpResult.Code, httpResult.Body.String())
+	}
+	assertCodexHTTPResult(t, httpResult.Body.Bytes())
+
+	mcpResult := mcpE2ECall(t, mcpserver.NewSDK(service2), 1, "get_task_result", map[string]any{"task_id": created.ID})
+	assertCodexWorkerResult(t, decodeWorkerResult(t, mcpResult["result"]))
+}
+
+func writeCodexResultFixture(t *testing.T, root string) string {
+	t.Helper()
+	executable := filepath.Join(root, "codex-fixture")
+	fixture := "#!/bin/sh\n" +
+		"while [ $# -gt 0 ]; do\n" +
+		"  if [ \"$1\" = \"--output-last-message\" ]; then shift; output=$1; fi\n" +
+		"  shift\n" +
+		"done\n" +
+		"printf 'verified trusted-local Codex task' > \"$output\"\n"
+	if err := os.WriteFile(executable, []byte(fixture), 0o755); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	return executable
+}
+
 func assertCodexHTTPResult(t *testing.T, body []byte) {
 	t.Helper()
 	var payload struct {
