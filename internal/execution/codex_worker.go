@@ -147,7 +147,7 @@ func (w *CodexWorker) Run(ctx context.Context, input WorkerInput) (WorkerResult,
 	// Do not leak the server's ambient tokens, proxy settings, or home
 	// directory into the provider process. Without an explicitly configured
 	// dedicated Codex home, each run receives an empty, disposable home.
-	command.Env = []string{"HOME=" + homeDir, "PATH=/usr/bin:/bin"}
+	command.Env = []string{"HOME=" + homeDir, "CODEX_HOME=" + homeDir, "PATH=/usr/bin:/bin"}
 	command.Stdout = stdout
 	command.Stderr = stderr
 	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}

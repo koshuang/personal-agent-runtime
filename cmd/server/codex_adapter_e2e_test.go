@@ -60,7 +60,7 @@ func TestCodexAdapterPreservesVerifiedEvidenceThroughHTTPAndMCP(t *testing.T) {
 		defer store.Close()
 		s := &server{tasks: service}
 		create := httptest.NewRecorder()
-		testMux(s).ServeHTTP(create, httptest.NewRequest(http.MethodPost, "/v1/tasks", bytes.NewBufferString(`{"prompt":"summarize fixture"}`)))
+		testMux(s).ServeHTTP(create, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/tasks", bytes.NewBufferString(`{"prompt":"summarize fixture"}`)))
 		if create.Code != http.StatusAccepted {
 			t.Fatalf("create status=%d body=%s", create.Code, create.Body.String())
 		}
@@ -74,7 +74,7 @@ func TestCodexAdapterPreservesVerifiedEvidenceThroughHTTPAndMCP(t *testing.T) {
 			t.Fatalf("run: %v", err)
 		}
 		result := httptest.NewRecorder()
-		testMux(s).ServeHTTP(result, httptest.NewRequest(http.MethodGet, "/v1/tasks/"+created.TaskID+"/result", nil))
+		testMux(s).ServeHTTP(result, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/tasks/"+created.TaskID+"/result", nil))
 		if result.Code != http.StatusOK {
 			t.Fatalf("result status=%d body=%s", result.Code, result.Body.String())
 		}

@@ -145,6 +145,9 @@ func buildWorker(name, workspaceRoot string) (execution.Worker, error) {
 	case "workspace":
 		return execution.NewReadOnlyWorkspaceWorker(workspaceRoot)
 	case "codex":
+		if strings.TrimSpace(os.Getenv("PAR_WORKSPACE_ROOT")) == "" {
+			return nil, errors.New("PAR_WORKSPACE_ROOT is required for PAR_WORKER=codex")
+		}
 		return execution.NewCodexWorker(execution.CodexWorkerConfig{
 			Executable:    env("PAR_CODEX_EXECUTABLE", ""),
 			WorkspaceRoot: workspaceRoot,

@@ -2,9 +2,11 @@ package execution
 
 import (
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -16,6 +18,7 @@ func TestCodexWorkerRunsFixedReadOnlyCommandWithDurableProvenance(t *testing.T) 
 	printf '%s\n' "$@" > "$PWD/args"
 	printf '%s\n' "${INHERITED_SECRET-unset}" > "$PWD/secret"
 	printf '%s\n' "$HOME" > "$PWD/home"
+	printf '%s\n' "$CODEX_HOME" > "$PWD/codex-home"
 printf 'trusted local summary\n'
 `)
 	t.Setenv("INHERITED_SECRET", "do-not-leak")
@@ -59,6 +62,9 @@ printf 'trusted local summary\n'
 	if got := strings.TrimSpace(mustReadFile(t, filepath.Join(root, "home"))); got == canonicalRoot || got == "" {
 		t.Fatalf("provider home=%q must be an isolated directory", got)
 	}
+	if got := strings.TrimSpace(mustReadFile(t, filepath.Join(root, "codex-home"))); got == "" || got != strings.TrimSpace(mustReadFile(t, filepath.Join(root, "home"))) {
+		t.Fatalf("CODEX_HOME=%q must match isolated HOME", got)
+	}
 	args := strings.Split(strings.TrimSpace(mustReadFile(t, filepath.Join(root, "args"))), "\n")
 	if len(args) != 8 || strings.Join(args[:5], "\n") != "exec\n--sandbox\nread-only\n--skip-git-repo-check\n--output-last-message" || args[5] == "" || args[6] != "--" || args[7] != "summarize this workspace" {
 		t.Fatalf("unexpected codex arguments: %q", args)
@@ -85,13 +91,54 @@ func TestCodexWorkerTreatsPromptAsDataNotArguments(t *testing.T) {
 func TestCodexWorkerFailsOnTimeoutAndNonZeroExit(t *testing.T) {
 	root := t.TempDir()
 	t.Run("timeout", func(t *testing.T) {
-		executable := writeCodexFixture(t, root, "#!/bin/sh\nsleep 5\n")
-		worker, err := NewCodexWorker(CodexWorkerConfig{Executable: executable, WorkspaceRoot: root, Timeout: 20 * time.Millisecond, MaxOutputBytes: 1024})
+		childPipe := filepath.Join(root, "child.pipe")
+		if err := syscall.Mkfifo(childPipe, 0o600); err != nil {
+			t.Fatalf("create child pipe: %v", err)
+		}
+		readyFile := filepath.Join(root, "child.ready")
+		executable := writeCodexFixture(t, root, "#!/bin/sh\n(exec 3> \"$PWD/child.pipe\"; : > \"$PWD/child.ready\"; sleep 30 >&3) &\nwait\n")
+		childExited := make(chan error, 1)
+		go func() {
+			reader, err := os.Open(childPipe)
+			if err != nil {
+				childExited <- err
+				return
+			}
+			defer reader.Close()
+			_, err = io.Copy(io.Discard, reader)
+			childExited <- err
+		}()
+		worker, err := NewCodexWorker(CodexWorkerConfig{Executable: executable, WorkspaceRoot: root, Timeout: 500 * time.Millisecond, MaxOutputBytes: 1024})
 		if err != nil {
 			t.Fatalf("new worker: %v", err)
 		}
-		if _, err := worker.Run(context.Background(), WorkerInput{Prompt: "wait"}); err == nil {
+		runDone := make(chan error, 1)
+		go func() {
+			_, err := worker.Run(context.Background(), WorkerInput{Prompt: "wait"})
+			runDone <- err
+		}()
+		readyDeadline := time.Now().Add(2 * time.Second)
+		for {
+			if _, err := os.Stat(readyFile); err == nil {
+				break
+			} else if !os.IsNotExist(err) {
+				t.Fatalf("stat child readiness: %v", err)
+			}
+			if time.Now().After(readyDeadline) {
+				t.Fatal("descendant did not open the pipe before timeout")
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		if err := <-runDone; err == nil {
 			t.Fatal("expected timeout failure")
+		}
+		select {
+		case err := <-childExited:
+			if err != nil {
+				t.Fatalf("read child pipe: %v", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("descendant still holds the pipe after timeout")
 		}
 	})
 	t.Run("non-zero", func(t *testing.T) {

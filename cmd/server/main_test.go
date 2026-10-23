@@ -56,6 +56,7 @@ func TestBuildWorkerKeepsEchoDefaultAndRequiresExplicitCodexExecutable(t *testin
 	}
 
 	t.Setenv("PAR_CODEX_EXECUTABLE", "")
+	t.Setenv("PAR_WORKSPACE_ROOT", root)
 	if _, err := buildWorker("codex", root); err == nil {
 		t.Fatal("codex must require explicit executable configuration")
 	}
@@ -65,6 +66,11 @@ func TestBuildWorkerKeepsEchoDefaultAndRequiresExplicitCodexExecutable(t *testin
 		t.Fatalf("write codex fixture: %v", err)
 	}
 	t.Setenv("PAR_CODEX_EXECUTABLE", executable)
+	t.Setenv("PAR_WORKSPACE_ROOT", "")
+	if _, err := buildWorker("codex", root); err == nil {
+		t.Fatal("codex must require explicit workspace configuration")
+	}
+	t.Setenv("PAR_WORKSPACE_ROOT", root)
 	worker, err = buildWorker("codex", root)
 	if err != nil {
 		t.Fatalf("build configured codex worker: %v", err)

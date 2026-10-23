@@ -1,7 +1,8 @@
 # Trusted-local Codex worker v0
 
-`PAR_WORKER=codex` is an opt-in local command adapter. `echo` remains the
-default worker and its default maximum cost remains `0`.
+`PAR_WORKER=codex` is an opt-in local command adapter. It requires an explicit
+`PAR_WORKSPACE_ROOT`; `echo` remains the default worker and its default maximum
+cost remains `0`.
 
 The adapter only starts when `PAR_CODEX_EXECUTABLE` is an absolute path to an
 executable selected by the local operator. Task text never selects a binary,
@@ -14,12 +15,12 @@ shell, flags, workspace, or execution mode. The fixed invocation is:
 
 The configured `PAR_WORKSPACE_ROOT` is canonicalized and used as the process
 working directory. The process receives a minimal environment containing only
-`PATH` and `HOME`; ambient tokens, proxy configuration, and other server
-environment variables are not inherited. Unless `PAR_CODEX_HOME` names an
-existing, dedicated local Codex home, each invocation receives a disposable
-empty home which is removed afterward. Operators who opt into a persistent
-Codex identity must explicitly select a dedicated home and remain responsible
-for its credentials and cost boundary.
+`PATH`, `HOME`, and `CODEX_HOME`; ambient tokens, proxy configuration, and
+other server environment variables are not inherited. Unless `PAR_CODEX_HOME`
+names an existing, dedicated local Codex home, each invocation receives a
+disposable empty home which is removed afterward. Operators who opt into a
+persistent Codex identity must explicitly select a dedicated home and remain
+responsible for its credentials and cost boundary.
 
 Each invocation is bounded by a two-minute timeout and a 64 KiB limit per
 stdout/stderr/output-message channel. Timeout, cancellation, missing binary,
