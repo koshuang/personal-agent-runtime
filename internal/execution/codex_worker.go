@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -53,7 +54,11 @@ func NewCodexWorker(config CodexWorkerConfig) (*CodexWorker, error) {
 		return nil, errors.New("codex executable must be an executable file")
 	}
 
-	workspaceRoot, err := filepath.Abs(strings.TrimSpace(config.WorkspaceRoot))
+	workspaceRoot := strings.TrimSpace(config.WorkspaceRoot)
+	if workspaceRoot == "" {
+		return nil, errors.New("workspace root is required")
+	}
+	workspaceRoot, err = filepath.Abs(workspaceRoot)
 	if err != nil {
 		return nil, fmt.Errorf("resolve workspace root: %w", err)
 	}
@@ -203,7 +208,12 @@ func (w *CodexWorker) Run(ctx context.Context, input WorkerInput) (WorkerResult,
 }
 
 func readCodexMessage(path string, limit int) (string, error) {
-	data, err := os.ReadFile(path)
+	file, err := os.Open(path)
+	if err != nil {
+		return "", fmt.Errorf("read codex output: %w", err)
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, int64(limit)+1))
 	if err != nil {
 		return "", fmt.Errorf("read codex output: %w", err)
 	}

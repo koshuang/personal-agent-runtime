@@ -183,6 +183,9 @@ func TestCodexWorkerRejectsUnsafeConfigurationAndOversizedOutput(t *testing.T) {
 	if _, err := NewCodexWorker(CodexWorkerConfig{Executable: "codex", WorkspaceRoot: root}); err == nil {
 		t.Fatal("expected relative executable rejection")
 	}
+	if _, err := NewCodexWorker(CodexWorkerConfig{Executable: writeCodexFixture(t, root, "#!/bin/sh\n"), WorkspaceRoot: "  "}); err == nil {
+		t.Fatal("expected blank workspace rejection")
+	}
 	executable := writeCodexFixture(t, root, "#!/bin/sh\nyes x | head -c 2048\n")
 	worker, err := NewCodexWorker(CodexWorkerConfig{Executable: executable, WorkspaceRoot: root, Timeout: time.Second, MaxOutputBytes: 16})
 	if err != nil {
@@ -190,6 +193,14 @@ func TestCodexWorkerRejectsUnsafeConfigurationAndOversizedOutput(t *testing.T) {
 	}
 	if _, err := worker.Run(context.Background(), WorkerInput{Prompt: "overflow"}); err == nil {
 		t.Fatal("expected output limit failure")
+	}
+	messageExecutable := writeCodexFixture(t, root, "#!/bin/sh\nwhile [ $# -gt 0 ]; do if [ \"$1\" = \"--output-last-message\" ]; then shift; output=$1; fi; shift; done\nyes x | head -c 2048 > \"$output\"\n")
+	messageWorker, err := NewCodexWorker(CodexWorkerConfig{Executable: messageExecutable, WorkspaceRoot: root, Timeout: time.Second, MaxOutputBytes: 16})
+	if err != nil {
+		t.Fatalf("new message worker: %v", err)
+	}
+	if _, err := messageWorker.Run(context.Background(), WorkerInput{Prompt: "overflow message"}); err == nil {
+		t.Fatal("expected output-message limit failure")
 	}
 }
 
