@@ -186,6 +186,9 @@ func TestCodexWorkerRejectsUnsafeConfigurationAndOversizedOutput(t *testing.T) {
 	if _, err := NewCodexWorker(CodexWorkerConfig{Executable: writeCodexFixture(t, root, "#!/bin/sh\n"), WorkspaceRoot: "  "}); err == nil {
 		t.Fatal("expected blank workspace rejection")
 	}
+	if _, err := NewCodexWorker(CodexWorkerConfig{Executable: writeCodexFixture(t, root, "#!/bin/sh\n"), WorkspaceRoot: root, Path: "relative/bin"}); err == nil {
+		t.Fatal("expected relative PATH rejection")
+	}
 	executable := writeCodexFixture(t, root, "#!/bin/sh\nyes x | head -c 2048\n")
 	worker, err := NewCodexWorker(CodexWorkerConfig{Executable: executable, WorkspaceRoot: root, Timeout: time.Second, MaxOutputBytes: 16})
 	if err != nil {

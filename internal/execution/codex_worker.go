@@ -18,6 +18,7 @@ import (
 const (
 	defaultCodexTimeout       = 2 * time.Minute
 	defaultCodexMaxOutputSize = 64 * 1024
+	defaultCodexPath          = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
 )
 
 // CodexWorkerConfig is deliberately configuration-only: task input cannot
@@ -26,6 +27,7 @@ type CodexWorkerConfig struct {
 	Executable     string
 	WorkspaceRoot  string
 	HomeDir        string
+	Path           string
 	Timeout        time.Duration
 	MaxOutputBytes int
 }
@@ -37,6 +39,7 @@ type CodexWorker struct {
 	executable     string
 	workspaceRoot  string
 	homeDir        string
+	path           string
 	timeout        time.Duration
 	maxOutputBytes int
 }
@@ -87,6 +90,10 @@ func NewCodexWorker(config CodexWorkerConfig) (*CodexWorker, error) {
 			return nil, errors.New("codex home must be a directory")
 		}
 	}
+	path, err := codexPath(config.Path)
+	if err != nil {
+		return nil, err
+	}
 
 	timeout := config.Timeout
 	if timeout == 0 {
@@ -107,6 +114,7 @@ func NewCodexWorker(config CodexWorkerConfig) (*CodexWorker, error) {
 		executable:     executable,
 		workspaceRoot:  workspaceRoot,
 		homeDir:        homeDir,
+		path:           path,
 		timeout:        timeout,
 		maxOutputBytes: maxOutputBytes,
 	}, nil
@@ -152,7 +160,7 @@ func (w *CodexWorker) Run(ctx context.Context, input WorkerInput) (WorkerResult,
 	// Do not leak the server's ambient tokens, proxy settings, or home
 	// directory into the provider process. Without an explicitly configured
 	// dedicated Codex home, each run receives an empty, disposable home.
-	command.Env = []string{"HOME=" + homeDir, "CODEX_HOME=" + homeDir, "PATH=/usr/bin:/bin"}
+	command.Env = []string{"HOME=" + homeDir, "CODEX_HOME=" + homeDir, "PATH=" + w.path}
 	command.Stdout = stdout
 	command.Stderr = stderr
 	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -205,6 +213,19 @@ func (w *CodexWorker) Run(ctx context.Context, input WorkerInput) (WorkerResult,
 			"quota_units":        nil,
 		},
 	}, nil
+}
+
+func codexPath(value string) (string, error) {
+	path := strings.TrimSpace(value)
+	if path == "" {
+		return defaultCodexPath, nil
+	}
+	for _, entry := range strings.Split(path, string(os.PathListSeparator)) {
+		if entry == "" || !filepath.IsAbs(entry) {
+			return "", errors.New("codex PATH entries must be absolute directories")
+		}
+	}
+	return path, nil
 }
 
 func readCodexMessage(path string, limit int) (string, error) {

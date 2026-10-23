@@ -83,6 +83,24 @@ func TestBuildWorkerKeepsEchoDefaultAndRequiresExplicitCodexExecutable(t *testin
 	}
 }
 
+func TestWorkerEstimatedCostRequiresExplicitPositiveCodexBudget(t *testing.T) {
+	t.Setenv("PAR_CODEX_ESTIMATED_COST_USD", "")
+	if _, err := workerEstimatedCostUSD("codex"); err == nil {
+		t.Fatal("codex must not default to zero estimated cost")
+	}
+	t.Setenv("PAR_CODEX_ESTIMATED_COST_USD", "0")
+	if _, err := workerEstimatedCostUSD("codex"); err == nil {
+		t.Fatal("codex must require a positive estimated cost")
+	}
+	t.Setenv("PAR_CODEX_ESTIMATED_COST_USD", "0.25")
+	if got, err := workerEstimatedCostUSD("codex"); err != nil || got != 0.25 {
+		t.Fatalf("cost=%v err=%v", got, err)
+	}
+	if got, err := workerEstimatedCostUSD("echo"); err != nil || got != 0 {
+		t.Fatalf("echo cost=%v err=%v", got, err)
+	}
+}
+
 func TestHealth(t *testing.T) {
 	db := filepath.Join(t.TempDir(), "runtime.db")
 	s, closeFn := newTestServer(t, db)

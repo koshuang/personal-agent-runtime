@@ -4,6 +4,11 @@
 `PAR_WORKSPACE_ROOT`; `echo` remains the default worker and its default maximum
 cost remains `0`.
 
+Codex is fail-closed on cost: the local operator must set a finite, positive
+`PAR_CODEX_ESTIMATED_COST_USD`, and `PAR_MAX_COST_USD` must be at least that
+value. This is a pre-dispatch admission estimate, not fabricated usage
+telemetry; actual provider cost remains unknown unless the provider supplies it.
+
 The adapter only starts when `PAR_CODEX_EXECUTABLE` is an absolute path to an
 executable selected by the local operator. Task text never selects a binary,
 shell, flags, workspace, or execution mode. The fixed invocation is:
@@ -21,6 +26,12 @@ names an existing, dedicated local Codex home, each invocation receives a
 disposable empty home which is removed afterward. Operators who opt into a
 persistent Codex identity must explicitly select a dedicated home and remain
 responsible for its credentials and cost boundary.
+
+The default `PATH` contains only `/opt/homebrew/bin`, `/usr/local/bin`,
+`/usr/bin`, and `/bin`, so a standard global Homebrew installation can run an
+`env node`-based Codex launcher without inheriting the server environment. An
+operator using a non-standard native runtime can set `PAR_CODEX_PATH`; every
+entry must be an absolute directory.
 
 Each invocation is bounded by a two-minute timeout and a 64 KiB limit per
 stdout/stderr/output-message channel. Timeout, cancellation, missing binary,

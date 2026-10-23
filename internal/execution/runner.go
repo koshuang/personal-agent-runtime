@@ -14,6 +14,8 @@ var ErrVerificationFailed = errors.New("verification failed")
 
 const terminalUpdateTimeout = 2 * time.Second
 
+const cancellationPollInterval = 25 * time.Millisecond
+
 type WorkerInput struct {
 	TaskID string
 	Prompt string
@@ -98,7 +100,10 @@ func (r *Runner) Run(ctx context.Context, taskID string) error {
 		return err
 	}
 
-	result, err := r.worker.Run(ctx, input)
+	runCtx, cancelRun := context.WithCancel(ctx)
+	stopWatchingCancel := r.cancelWhenTaskCanceled(runCtx, taskID, cancelRun)
+	defer stopWatchingCancel()
+	result, err := r.worker.Run(runCtx, input)
 	if err != nil {
 		return errors.Join(err, r.persistFailure(taskID, "running", "worker"))
 	}
@@ -128,6 +133,32 @@ func (r *Runner) Run(ctx context.Context, taskID string) error {
 	}
 	text := string(payload)
 	return r.tasks.UpdateState(ctx, taskID, "verifying", "completed", "completed", 100, &text)
+}
+
+func (r *Runner) cancelWhenTaskCanceled(ctx context.Context, taskID string, cancel context.CancelFunc) func() {
+	done := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(cancellationPollInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				t, err := r.tasks.Get(context.Background(), taskID)
+				if err == nil && t.Status == "canceled" {
+					cancel()
+					return
+				}
+			}
+		}
+	}()
+	return func() {
+		close(done)
+		cancel()
+	}
 }
 
 func (r *Runner) persistFailure(taskID, expectedStatus, stage string) error {

@@ -64,6 +64,10 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	estimatedCostUSD, err := workerEstimatedCostUSD(workerName)
+	if err != nil {
+		log.Fatal(err)
+	}
 	maxCostUSD, err := nonNegativeFloatEnv("PAR_MAX_COST_USD", 0)
 	if err != nil {
 		log.Fatal(err)
@@ -71,7 +75,7 @@ func main() {
 	router, err := execution.NewRouter(maxCostUSD, execution.RouteCandidate{
 		Name:             workerName,
 		Worker:           worker,
-		EstimatedCostUSD: 0,
+		EstimatedCostUSD: estimatedCostUSD,
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -138,6 +142,21 @@ func main() {
 	log.Fatal(httpServer.ListenAndServe())
 }
 
+func workerEstimatedCostUSD(name string) (float64, error) {
+	if strings.ToLower(strings.TrimSpace(name)) != "codex" {
+		return 0, nil
+	}
+	value := strings.TrimSpace(os.Getenv("PAR_CODEX_ESTIMATED_COST_USD"))
+	if value == "" {
+		return 0, errors.New("PAR_CODEX_ESTIMATED_COST_USD must be explicitly set to a positive value for PAR_WORKER=codex")
+	}
+	parsed, err := strconv.ParseFloat(value, 64)
+	if err != nil || parsed <= 0 || math.IsNaN(parsed) || math.IsInf(parsed, 0) {
+		return 0, errors.New("PAR_CODEX_ESTIMATED_COST_USD must be a finite positive number")
+	}
+	return parsed, nil
+}
+
 func buildWorker(name, workspaceRoot string) (execution.Worker, error) {
 	switch strings.ToLower(strings.TrimSpace(name)) {
 	case "echo":
@@ -152,6 +171,7 @@ func buildWorker(name, workspaceRoot string) (execution.Worker, error) {
 			Executable:    env("PAR_CODEX_EXECUTABLE", ""),
 			WorkspaceRoot: workspaceRoot,
 			HomeDir:       env("PAR_CODEX_HOME", ""),
+			Path:          env("PAR_CODEX_PATH", ""),
 		})
 	default:
 		return nil, fmt.Errorf("unsupported PAR_WORKER %q", name)
