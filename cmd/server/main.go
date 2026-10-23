@@ -144,6 +144,12 @@ func buildWorker(name, workspaceRoot string) (execution.Worker, error) {
 		return execution.EchoWorker{}, nil
 	case "workspace":
 		return execution.NewReadOnlyWorkspaceWorker(workspaceRoot)
+	case "codex":
+		return execution.NewCodexWorker(execution.CodexWorkerConfig{
+			Executable:    env("PAR_CODEX_EXECUTABLE", ""),
+			WorkspaceRoot: workspaceRoot,
+			HomeDir:       env("PAR_CODEX_HOME", ""),
+		})
 	default:
 		return nil, fmt.Errorf("unsupported PAR_WORKER %q", name)
 	}

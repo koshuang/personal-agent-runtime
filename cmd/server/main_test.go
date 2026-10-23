@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/koshuang/personal-agent-runtime/internal/execution"
 	"github.com/koshuang/personal-agent-runtime/internal/task"
 )
 
@@ -40,6 +42,38 @@ func TestHTTPServerTimeouts(t *testing.T) {
 	}
 	if srv.Handler != h {
 		t.Fatal("handler wiring changed")
+	}
+}
+
+func TestBuildWorkerKeepsEchoDefaultAndRequiresExplicitCodexExecutable(t *testing.T) {
+	root := t.TempDir()
+	worker, err := buildWorker("echo", root)
+	if err != nil {
+		t.Fatalf("build echo worker: %v", err)
+	}
+	if _, ok := worker.(execution.EchoWorker); !ok {
+		t.Fatalf("default worker type=%T want EchoWorker", worker)
+	}
+
+	t.Setenv("PAR_CODEX_EXECUTABLE", "")
+	if _, err := buildWorker("codex", root); err == nil {
+		t.Fatal("codex must require explicit executable configuration")
+	}
+
+	executable := filepath.Join(root, "codex-fixture")
+	if err := os.WriteFile(executable, []byte("#!/bin/sh\nprintf ok\\n\n"), 0o755); err != nil {
+		t.Fatalf("write codex fixture: %v", err)
+	}
+	t.Setenv("PAR_CODEX_EXECUTABLE", executable)
+	worker, err = buildWorker("codex", root)
+	if err != nil {
+		t.Fatalf("build configured codex worker: %v", err)
+	}
+	if _, ok := worker.(*execution.CodexWorker); !ok {
+		t.Fatalf("configured worker type=%T want *CodexWorker", worker)
+	}
+	if _, err := buildWorker("opencode", root); err == nil {
+		t.Fatal("unsupported providers must fail closed")
 	}
 }
 
