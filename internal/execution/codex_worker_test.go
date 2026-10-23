@@ -43,8 +43,11 @@ printf 'trusted local summary\n'
 	if result.Checks["provider"] != "codex" || result.Checks["workspace_policy"] != "trusted-local-read-only" {
 		t.Fatalf("missing provenance: %#v", result.Checks)
 	}
-	if result.Checks["exit_status"] != 0 || result.Checks["estimated_cost_usd"] != 0.0 {
+	if result.Checks["exit_status"] != 0 {
 		t.Fatalf("missing execution evidence: %#v", result.Checks)
+	}
+	if _, found := result.Checks["estimated_cost_usd"]; found {
+		t.Fatalf("worker must not contradict router admission cost: %#v", result.Checks)
 	}
 	if result.Checks["actual_cost_usd"] != nil || result.Checks["quota_units"] != nil || result.Checks["version"] != "unknown" {
 		t.Fatalf("unknown telemetry must remain unknown: %#v", result.Checks)
