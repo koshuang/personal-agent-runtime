@@ -101,6 +101,21 @@ func TestWorkerEstimatedCostRequiresExplicitPositiveCodexBudget(t *testing.T) {
 	}
 }
 
+func TestValidateWorkerCostCeilingRejectsUnaffordableCodexAtStartup(t *testing.T) {
+	if err := validateWorkerCostCeiling("codex", 0.25, 0); err == nil {
+		t.Fatal("codex must reject a zero max-cost ceiling when estimated cost is positive")
+	}
+	if err := validateWorkerCostCeiling("codex", 0.25, 0.24); err == nil {
+		t.Fatal("codex must reject estimated cost above the configured max-cost ceiling")
+	}
+	if err := validateWorkerCostCeiling("codex", 0.25, 0.25); err != nil {
+		t.Fatalf("equal codex cost ceiling should be accepted: %v", err)
+	}
+	if err := validateWorkerCostCeiling("echo", 0, 0); err != nil {
+		t.Fatalf("zero-cost echo worker should remain valid: %v", err)
+	}
+}
+
 func TestHealth(t *testing.T) {
 	db := filepath.Join(t.TempDir(), "runtime.db")
 	s, closeFn := newTestServer(t, db)
