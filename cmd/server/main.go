@@ -72,6 +72,9 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	if err := validateWorkerCostCeiling(workerName, estimatedCostUSD, maxCostUSD); err != nil {
+		log.Fatal(err)
+	}
 	router, err := execution.NewRouter(maxCostUSD, execution.RouteCandidate{
 		Name:             workerName,
 		Worker:           worker,
@@ -155,6 +158,13 @@ func workerEstimatedCostUSD(name string) (float64, error) {
 		return 0, errors.New("PAR_CODEX_ESTIMATED_COST_USD must be a finite positive number")
 	}
 	return parsed, nil
+}
+
+func validateWorkerCostCeiling(name string, estimatedCostUSD, maxCostUSD float64) error {
+	if strings.ToLower(strings.TrimSpace(name)) == "codex" && estimatedCostUSD > maxCostUSD {
+		return fmt.Errorf("PAR_MAX_COST_USD (%g) must be at least PAR_CODEX_ESTIMATED_COST_USD (%g) for PAR_WORKER=codex", maxCostUSD, estimatedCostUSD)
+	}
+	return nil
 }
 
 func buildWorker(name, workspaceRoot string) (execution.Worker, error) {
