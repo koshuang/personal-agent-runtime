@@ -6,6 +6,7 @@ import (
 	"math"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/koshuang/personal-agent-runtime/internal/task"
 )
@@ -25,6 +26,14 @@ func (nanWorker) Run(context.Context, WorkerInput) (WorkerResult, error) {
 		Checks:     map[string]any{},
 		Confidence: math.NaN(),
 	}, nil
+}
+
+type contextBlockingWorker struct{ started chan<- struct{} }
+
+func (w contextBlockingWorker) Run(ctx context.Context, _ WorkerInput) (WorkerResult, error) {
+	w.started <- struct{}{}
+	<-ctx.Done()
+	return WorkerResult{}, ctx.Err()
 }
 
 func openTaskService(t *testing.T) (*task.Service, *task.Store) {
@@ -137,5 +146,40 @@ func TestGuardedTransitionCannotReviveCanceledTask(t *testing.T) {
 	}
 	if got.Status != "canceled" || got.Stage != "canceled" {
 		t.Fatalf("canceled task was revived: %+v", got)
+	}
+}
+
+func TestCancelingRunningTaskCancelsWorkerContext(t *testing.T) {
+	service, _ := openTaskService(t)
+	created, err := service.Create(t.Context(), "cancel provider process")
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	started := make(chan struct{}, 1)
+	runner := NewRunner(service, contextBlockingWorker{started: started}, DeterministicVerifier{})
+	runDone := make(chan error, 1)
+	go func() { runDone <- runner.Run(context.Background(), created.ID) }()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("worker did not start")
+	}
+	if err := service.Cancel(t.Context(), created.ID); err != nil {
+		t.Fatalf("cancel: %v", err)
+	}
+	select {
+	case err := <-runDone:
+		if err == nil {
+			t.Fatal("expected canceled worker failure")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("worker context was not canceled")
+	}
+	got, err := service.Get(t.Context(), created.ID)
+	if err != nil {
+		t.Fatalf("get task: %v", err)
+	}
+	if got.Status != "canceled" {
+		t.Fatalf("canceled task changed status: %+v", got)
 	}
 }

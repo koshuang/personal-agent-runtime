@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/koshuang/personal-agent-runtime/internal/execution"
 	"github.com/koshuang/personal-agent-runtime/internal/task"
 )
 
@@ -40,6 +42,77 @@ func TestHTTPServerTimeouts(t *testing.T) {
 	}
 	if srv.Handler != h {
 		t.Fatal("handler wiring changed")
+	}
+}
+
+func TestBuildWorkerKeepsEchoDefaultAndRequiresExplicitCodexExecutable(t *testing.T) {
+	root := t.TempDir()
+	worker, err := buildWorker("echo", root)
+	if err != nil {
+		t.Fatalf("build echo worker: %v", err)
+	}
+	if _, ok := worker.(execution.EchoWorker); !ok {
+		t.Fatalf("default worker type=%T want EchoWorker", worker)
+	}
+
+	t.Setenv("PAR_CODEX_EXECUTABLE", "")
+	t.Setenv("PAR_WORKSPACE_ROOT", root)
+	if _, err := buildWorker("codex", root); err == nil {
+		t.Fatal("codex must require explicit executable configuration")
+	}
+
+	executable := filepath.Join(root, "codex-fixture")
+	if err := os.WriteFile(executable, []byte("#!/bin/sh\nprintf ok\\n\n"), 0o755); err != nil {
+		t.Fatalf("write codex fixture: %v", err)
+	}
+	t.Setenv("PAR_CODEX_EXECUTABLE", executable)
+	t.Setenv("PAR_WORKSPACE_ROOT", "")
+	if _, err := buildWorker("codex", root); err == nil {
+		t.Fatal("codex must require explicit workspace configuration")
+	}
+	t.Setenv("PAR_WORKSPACE_ROOT", root)
+	worker, err = buildWorker("codex", root)
+	if err != nil {
+		t.Fatalf("build configured codex worker: %v", err)
+	}
+	if _, ok := worker.(*execution.CodexWorker); !ok {
+		t.Fatalf("configured worker type=%T want *CodexWorker", worker)
+	}
+	if _, err := buildWorker("opencode", root); err == nil {
+		t.Fatal("unsupported providers must fail closed")
+	}
+}
+
+func TestWorkerEstimatedCostRequiresExplicitPositiveCodexBudget(t *testing.T) {
+	t.Setenv("PAR_CODEX_ESTIMATED_COST_USD", "")
+	if _, err := workerEstimatedCostUSD("codex"); err == nil {
+		t.Fatal("codex must not default to zero estimated cost")
+	}
+	t.Setenv("PAR_CODEX_ESTIMATED_COST_USD", "0")
+	if _, err := workerEstimatedCostUSD("codex"); err == nil {
+		t.Fatal("codex must require a positive estimated cost")
+	}
+	t.Setenv("PAR_CODEX_ESTIMATED_COST_USD", "0.25")
+	if got, err := workerEstimatedCostUSD("codex"); err != nil || got != 0.25 {
+		t.Fatalf("cost=%v err=%v", got, err)
+	}
+	if got, err := workerEstimatedCostUSD("echo"); err != nil || got != 0 {
+		t.Fatalf("echo cost=%v err=%v", got, err)
+	}
+}
+
+func TestValidateWorkerCostCeilingRejectsUnaffordableCodexAtStartup(t *testing.T) {
+	if err := validateWorkerCostCeiling("codex", 0.25, 0); err == nil {
+		t.Fatal("codex must reject a zero max-cost ceiling when estimated cost is positive")
+	}
+	if err := validateWorkerCostCeiling("codex", 0.25, 0.24); err == nil {
+		t.Fatal("codex must reject estimated cost above the configured max-cost ceiling")
+	}
+	if err := validateWorkerCostCeiling("codex", 0.25, 0.25); err != nil {
+		t.Fatalf("equal codex cost ceiling should be accepted: %v", err)
+	}
+	if err := validateWorkerCostCeiling("echo", 0, 0); err != nil {
+		t.Fatalf("zero-cost echo worker should remain valid: %v", err)
 	}
 }
 
