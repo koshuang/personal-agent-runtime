@@ -37,11 +37,12 @@ Each invocation is bounded by a two-minute timeout and a 64 KiB limit per
 stdout and output-message channel. Provider stderr is discarded rather than
 returned or buffered, because diagnostics can contain sensitive task context
 and a bounded stderr pipe could otherwise terminate a successful provider
-process when it fills. Timeout, cancellation, missing binary, non-zero exit,
-invalid output, and output-limit failures return an error to the existing
-Runner; the task becomes `failed` and never receives a completed result. The
-process is placed in a dedicated process group so cancellation terminates its
-descendants.
+process when it fills. Timeout, missing binary, non-zero exit, invalid output,
+and output-limit failures return an error to the existing Runner; the task
+becomes `failed` and never receives a completed result. A task canceled through
+the Task API keeps its `canceled` status while cancellation propagates to the
+worker process. The process is placed in a dedicated process group so
+cancellation terminates its descendants.
 
 On success the ordinary verified `worker-result.json` artifact contains
 provider, worker, fixed command class, `version: unknown`, workspace policy,
