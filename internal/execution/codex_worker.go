@@ -151,7 +151,6 @@ func (w *CodexWorker) Run(ctx context.Context, input WorkerInput) (WorkerResult,
 	runCtx, cancel := context.WithTimeout(ctx, w.timeout)
 	defer cancel()
 	stdout := &limitedBuffer{limit: w.maxOutputBytes}
-	stderr := &limitedBuffer{limit: w.maxOutputBytes}
 	command := exec.CommandContext(runCtx, w.executable,
 		"exec", "--sandbox", "read-only", "--skip-git-repo-check",
 		"--output-last-message", resultPath, "--", prompt,
@@ -162,7 +161,10 @@ func (w *CodexWorker) Run(ctx context.Context, input WorkerInput) (WorkerResult,
 	// dedicated Codex home, each run receives an empty, disposable home.
 	command.Env = []string{"HOME=" + homeDir, "CODEX_HOME=" + homeDir, "PATH=" + w.path}
 	command.Stdout = stdout
-	command.Stderr = stderr
+	// Provider stderr is deliberately discarded: diagnostics can contain
+	// sensitive task context, and bounding an unread channel can terminate an
+	// otherwise-successful provider process once that buffer fills.
+	command.Stderr = io.Discard
 	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	command.Cancel = func() error {
 		if command.Process == nil {
@@ -179,8 +181,6 @@ func (w *CodexWorker) Run(ctx context.Context, input WorkerInput) (WorkerResult,
 		if errors.Is(err, errOutputLimit) {
 			return WorkerResult{}, fmt.Errorf("codex execution output: %w", err)
 		}
-		// Provider stderr is deliberately not returned: the dispatcher logs worker
-		// errors and provider diagnostics can contain sensitive task context.
 		return WorkerResult{}, fmt.Errorf("codex execution failed: %w", err)
 	}
 
